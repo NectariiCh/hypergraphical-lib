@@ -1,0 +1,9 @@
+{
+  "_comment": "Tiling and offset demo. tiling 8x8 repeats the texture eight times across the model's 0..1 UV range, which needs GL_REPEAT plus a real mip chain and anisotropic filtering - none of which a vanilla atlas texture can do.",
+  "albedo": "minecraft:textures/block/polished_blackstone.png",
+  "metallic": 0.1,
+  "smoothness": 0.75,
+  "tiling": [8.0, 8.0],
+  "offset": [0.0, 0.0],
+  "reflectivity": 0.8
+}

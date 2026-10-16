@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "Reference for the OTHER way to render an .obj: Forge's own forge:obj model loader,",
+    "through the vanilla block/item pipeline. Point a blockstate at this and the model",
+    "becomes an ordinary block model - it gets vanilla's per-face diffuse shading and its",
+    "textures must live in an atlas, so there is no metallic, no smoothness and no probe.",
+    "",
+    "Use this when you want an .obj shaped block that behaves like any other block.",
+    "Use HypergraphicalAPI.spawn for PBR, arbitrary coordinates and reflections.",
+    "This file is inert on its own; nothing references it."
+  ],
+  "loader": "forge:obj",
+  "model": "hypergraphical:models/obj/test_cube.obj",
+  "flip_v": true,
+  "automatic_culling": true,
+  "shade_quads": true,
+  "emissive_ambient": false,
+  "textures": {
+    "particle": "minecraft:block/polished_andesite"
+  }
+}

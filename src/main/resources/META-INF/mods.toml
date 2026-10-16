@@ -1,0 +1,51 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+issueTrackerURL = "https://github.com/nectariich/hypergraphical/issues"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''
+${mod_description}
+'''
+displayTest = "IGNORE_ALL_VERSION"
+
+# ---------------------------------------------------------------------------
+# Dependencies
+# ---------------------------------------------------------------------------
+
+[[dependencies.${mod_id}]]
+    modId = "forge"
+    mandatory = true
+    versionRange = "${forge_version_range}"
+    ordering = "NONE"
+    side = "BOTH"
+
+[[dependencies.${mod_id}]]
+    modId = "minecraft"
+    mandatory = true
+    versionRange = "${minecraft_version_range}"
+    ordering = "NONE"
+    side = "BOTH"
+
+# Embeddium is a hard requirement, as requested. The PBR pass assumes a GL 3.3+
+# core context and Embeddium's terrain renderer, and probe capture is tuned for
+# Embeddium's chunk visibility graph.
+[[dependencies.${mod_id}]]
+    modId = "embeddium"
+    mandatory = true
+    versionRange = "${embeddium_version_range}"
+    ordering = "AFTER"
+    side = "CLIENT"
+
+# Oculus is optional. When a shader pack is active we defer to it: probe capture
+# downgrades to the environment strategy and our pass moves after translucents.
+[[dependencies.${mod_id}]]
+    modId = "oculus"
+    mandatory = false
+    versionRange = "${oculus_version_range}"
+    ordering = "AFTER"
+    side = "CLIENT"

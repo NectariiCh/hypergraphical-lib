@@ -1,0 +1,9 @@
+{
+  "_comment": "Optional per-mesh import settings, read from the sibling <name>.obj.json. Option names mirror Forge's forge:obj loader so one asset behaves the same through either path. Delete this file and the defaults below apply.",
+  "flip_v": true,
+  "normals": "auto",
+  "scale": 1.0,
+  "auto_materials": true,
+  "emissive_ambient": false,
+  "double_sided": false
+}

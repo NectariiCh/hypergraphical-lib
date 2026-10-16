@@ -1,0 +1,9 @@
+{
+  "_comment": "Alpha-blended material. Drawn in the second pass, after vanilla translucent blocks, with depth testing but no depth write.",
+  "albedo": "minecraft:textures/block/glass.png",
+  "alpha_mode": "blend",
+  "tint": [0.55, 0.8, 0.95, 0.45],
+  "metallic": 0.0,
+  "smoothness": 0.95,
+  "double_sided": true
+}

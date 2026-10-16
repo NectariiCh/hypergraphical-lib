@@ -1,0 +1,14 @@
+# Material library for test_sphere.obj.
+#
+# Uses the PBR extensions to the Wavefront format that Blender, Substance and Maya all
+# write: Pm for metallic, Pr for roughness. Hypergraphical reads these and derives a
+# material automatically, so this model renders correctly with no material JSON at all.
+# Pack JSON with the id hypergraphical:auto/... would override it.
+
+newmtl chrome
+Kd 0.900000 0.910000 0.920000
+Ks 1.000000 1.000000 1.000000
+Pm 1.000000
+Pr 0.050000
+d 1.000000
+illum 2

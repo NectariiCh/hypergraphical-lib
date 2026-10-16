@@ -1,0 +1,10 @@
+{
+  "_comment": "Cutout material. Alpha is tested against alpha_cutoff and discarded, so it still writes depth and stays in the solid pass - the correct choice for leaves and grates, which sort badly when blended.",
+  "albedo": "minecraft:textures/block/oak_leaves.png",
+  "alpha_mode": "cutout",
+  "alpha_cutoff": 0.5,
+  "metallic": 0.0,
+  "smoothness": 0.2,
+  "double_sided": true,
+  "sun_specular": 0.25
+}

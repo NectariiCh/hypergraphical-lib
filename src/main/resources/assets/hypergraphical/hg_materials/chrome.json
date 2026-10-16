@@ -1,0 +1,9 @@
+{
+  "_comment": "Near-mirror metal. The clearest demonstration of a reflection probe: with metallic 1 there is no diffuse term at all, so what you see IS the probe.",
+  "albedo": "minecraft:textures/block/iron_block.png",
+  "tint": [0.95, 0.96, 0.98, 1.0],
+  "metallic": 1.0,
+  "smoothness": 0.96,
+  "tiling": [1.0, 1.0],
+  "offset": [0.0, 0.0]
+}

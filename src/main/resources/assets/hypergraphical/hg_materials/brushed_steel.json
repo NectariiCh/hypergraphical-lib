@@ -1,0 +1,7 @@
+{
+  "_comment": "Half-rough metal. Reads the mid mips of the prefiltered radiance map, which is where the GGX prefilter earns its keep over a plain mip chain.",
+  "albedo": "minecraft:textures/block/iron_block.png",
+  "metallic": 1.0,
+  "smoothness": 0.55,
+  "tiling": [2.0, 2.0]
+}

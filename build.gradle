@@ -1,0 +1,198 @@
+plugins {
+    id 'eclipse'
+    id 'idea'
+    id 'java-library'
+    id 'maven-publish'
+    id 'net.minecraftforge.gradle' version '[6.0.16,6.2)'
+}
+
+version = "${mod_version}+mc${minecraft_version}"
+group = mod_group
+base { archivesName = mod_id }
+
+java {
+    toolchain.languageVersion = JavaLanguageVersion.of(17)
+    withSourcesJar()
+}
+
+minecraft {
+    mappings channel: mapping_channel, version: mapping_version
+
+
+    copyIdeResources = true
+
+    runs {
+        configureEach {
+            workingDirectory project.file('run')
+            property 'forge.logging.markers', ''
+            property 'forge.logging.console.level', 'debug'
+            // Our renderer talks to raw GL; this surfaces driver errors immediately in dev.
+            property 'hypergraphical.glDebug', 'true'
+
+            // Lets Mixin remap third-party mods' refmaps for this dev environment.
+            //
+            // A published mod's refmap names MC members in SRG (GuiGraphics.m_280159_), but a
+            // userdev run uses the official mappings, where that member is called something
+            // else entirely. Without these two properties every mixin in Embeddium fails with
+            // "could not find any targets matching", which is fatal. fg.deobf remaps the mod's
+            // bytecode but cannot touch the refmap JSON, so Mixin has to do it at load time
+            // from the SRG->official table ForgeGradle already generates for reobfJar.
+            property 'mixin.env.remapRefMap', 'true'
+            property 'mixin.env.refMapRemappingFile',
+                    file('build/createSrgToMcp/output.srg').absolutePath
+
+            mods { "${mod_id}" { source sourceSets.main } }
+        }
+        client {
+            property 'forge.enabledGameTestNamespaces', mod_id
+        }
+        server {
+            property 'forge.enabledGameTestNamespaces', mod_id
+            args '--nogui'
+        }
+        data {
+            workingDirectory project.file('run-data')
+            args '--mod', mod_id, '--all',
+                 '--output', file('src/generated/resources/'),
+                 '--existing', file('src/main/resources/')
+        }
+    }
+}
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
+
+repositories {
+    mavenCentral()
+    maven {
+        name = 'Modrinth'
+        url = 'https://api.modrinth.com/maven'
+        content { includeGroup 'maven.modrinth' }
+    }
+}
+
+// Mods the dev run needs, kept out of the published metadata.
+//
+// Embeddium is a mandatory runtime dependency, but declaring it as `runtimeOnly` would put it
+// in our POM, and then every downstream consumer inherits a production-obfuscated mod jar they
+// have to run through fg.deobf themselves. mods.toml already states the requirement, and that
+// is the mechanism the mod loader actually enforces. So: a configuration of our own, added to
+// the run classpath and nothing else.
+// `runtimeClasspath` is what ForgeGradle resolves to build the run classpath, while
+// `runtimeElements` is what maven-publish turns into POM dependencies. They are siblings, both
+// extending implementation + runtimeOnly, so extending only the former gives us run-only
+// dependencies. This is the same trick newer ForgeGradle and NeoGradle expose as `localRuntime`.
+configurations {
+    devRuntime
+    runtimeClasspath.extendsFrom devRuntime
+}
+
+dependencies {
+    minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+
+    // Neither mod is on the compile classpath: Embeddium is reached through ModList and
+    // Oculus through reflection on IrisApi (see the ...hypergraphical.compat package), which
+    // keeps our build independent of two fast-moving APIs.
+    //
+    // fg.deobf remaps the published jar's bytecode from SRG names to the dev mappings. It
+    // does NOT touch the mixin refmap JSON inside the jar, which is why the run config sets
+    // mixin.env.remapRefMap / refMapRemappingFile above. Both halves are needed.
+    devRuntime fg.deobf("maven.modrinth:embeddium:${embeddium_version}")
+
+    // hasProperty first: findProperty returns null when the line is missing from
+    // gradle.properties, and calling toBoolean() on that is an NPE rather than a default.
+    if (project.hasProperty('dev_with_oculus') && dev_with_oculus.toBoolean()) {
+        devRuntime fg.deobf("maven.modrinth:oculus:${oculus_version}")
+    }
+}
+
+tasks.named('processResources', ProcessResources).configure {
+    def replacements = [
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mod_license            : mod_license,
+            mod_description        : mod_description,
+            minecraft_version_range: minecraft_version_range,
+            forge_version_range    : forge_version_range,
+            loader_version_range   : loader_version_range,
+            embeddium_version_range: embeddium_version_range,
+            oculus_version_range   : oculus_version_range,
+    ]
+    inputs.properties replacements
+    filesMatching(['META-INF/mods.toml', 'pack.mcmeta']) {
+        expand replacements
+    }
+}
+
+tasks.named('jar', Jar).configure {
+    manifest {
+        attributes([
+                'Specification-Title'     : mod_id,
+                'Specification-Vendor'    : mod_authors,
+                'Specification-Version'   : '1',
+                'Implementation-Title'    : mod_name,
+                'Implementation-Version'  : mod_version,
+                'Implementation-Vendor'   : mod_authors,
+        ])
+    }
+    finalizedBy 'reobfJar'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.compilerArgs << '-Xlint:all,-processing,-serial'
+}
+
+publishing {
+    publications.register('mavenJava', MavenPublication) { from components.java }
+    repositories { maven { url = "file://${project.projectDir}/mcmodsrepo" } }
+}
+
+// ---------------------------------------------------------------------------
+// Offline validation tools
+// ---------------------------------------------------------------------------
+//
+// These live in their own source set so they never reach the mod jar, and they run against
+// the real main classpath so they exercise the same code and the same LWJGL the game does.
+//
+//   gradlew checkShaders   compile + link every GLSL program in a real GL 3.3 core context
+//   gradlew checkObj       run the OBJ importer over the shipped test assets and assert
+//                          index ranges, sub-mesh coverage, unit normals, orthogonal
+//                          tangents and face winding
+//   gradlew checkAssets    both
+//
+// checkShaders needs a GPU, so it is not wired into `check`; a headless machine would fail
+// it for the wrong reason.
+
+sourceSets {
+    tools {
+        java.srcDirs = ['tools']
+        compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+        runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+    }
+}
+
+tasks.register('checkShaders', JavaExec) {
+    group = 'verification'
+    description = 'Compiles and links every Hypergraphical GLSL program on the real driver.'
+    dependsOn tasks.named('toolsClasses')
+    classpath = sourceSets.tools.runtimeClasspath
+    mainClass = 'ShaderCheck'
+    args file('src/main/resources/assets/hypergraphical').absolutePath
+}
+
+tasks.register('checkObj', JavaExec) {
+    group = 'verification'
+    description = 'Validates the OBJ importer against the shipped test assets.'
+    dependsOn tasks.named('toolsClasses')
+    classpath = sourceSets.tools.runtimeClasspath
+    mainClass = 'ObjCheck'
+    args file('src/main/resources/assets/hypergraphical').absolutePath
+}
+
+tasks.register('checkAssets') {
+    group = 'verification'
+    description = 'Runs both the shader and OBJ validators.'
+    dependsOn 'checkObj', 'checkShaders'
+}

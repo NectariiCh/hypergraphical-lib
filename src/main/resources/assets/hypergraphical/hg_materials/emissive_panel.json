@@ -1,0 +1,9 @@
+{
+  "_comment": "Emissive map demo. Emission is added after lighting and is not gated by the lightmap, so this stays bright in a pitch-dark cave. emissive_strength above 1 pushes it into the range a probe can pick up as a light source when it re-bakes.",
+  "albedo": "minecraft:textures/block/smooth_stone.png",
+  "emissive": "minecraft:textures/block/sea_lantern.png",
+  "emissive_color": [0.55, 0.85, 1.0],
+  "emissive_strength": 2.5,
+  "metallic": 0.0,
+  "smoothness": 0.35
+}

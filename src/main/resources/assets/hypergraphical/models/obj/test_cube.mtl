@@ -1,0 +1,17 @@
+# Two materials, so test_cube.obj exercises sub-mesh material routing.
+#
+# Texture paths use the fully qualified "namespace:path" form. Plain relative paths work too
+# and resolve against this file's directory, but relative paths cannot cross a namespace
+# boundary, so reaching vanilla's textures needs the explicit form.
+
+newmtl body
+Kd 0.780000 0.780000 0.800000
+Pm 0.000000
+Pr 0.650000
+map_Kd minecraft:textures/block/polished_andesite.png
+
+newmtl trim
+Kd 1.000000 1.000000 1.000000
+Pm 1.000000
+Pr 0.200000
+map_Kd minecraft:textures/block/gold_block.png
