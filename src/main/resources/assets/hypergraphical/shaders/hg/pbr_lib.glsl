@@ -82,3 +82,17 @@ vec3 hgIrradianceTint(samplerCube probe, vec3 normal, float maxMip) {
     vec3 average = textureLod(probe, normal, maxMip).rgb;
     return local / max(average, vec3(1e-3));
 }
+
+// ---------------------------------------------------------------------------
+// Specular occlusion
+// ---------------------------------------------------------------------------
+//
+// Ambient occlusion is a cosine-weighted visibility, which is right for diffuse light but
+// too blunt for a reflection: a smooth surface reflects one narrow lobe, and at grazing
+// angles that lobe tends to escape a crevice even when most of the hemisphere is blocked.
+// This is the approximation from Lagarde and de Rousiers, "Moving Frostbite to PBR" (2014):
+// it equals ao for rough surfaces seen head on and opens up for smooth ones at grazing
+// angles.
+float hgSpecularOcclusion(float nDotV, float ao, float roughness) {
+    return clamp(pow(nDotV + ao, exp2(-16.0 * roughness - 1.0)) - 1.0 + ao, 0.0, 1.0);
+}

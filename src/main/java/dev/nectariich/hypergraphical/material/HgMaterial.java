@@ -76,6 +76,13 @@ public final class HgMaterial {
     /** Multiplies the analytic sun highlight; 0 leaves only probe reflections. */
     public final float sunSpecular;
 
+    /**
+     * How much of a mesh's baked ambient occlusion this material shows, 0..1: multiplies the
+     * instance's occlusion strength. 0 suits a surface lit from behind, like a lamp lens sunk
+     * in a socket, whose corners would otherwise bake close to black. Default 1.
+     */
+    public final float occlusion;
+
     public HgMaterial(ResourceLocation id,
                       @Nullable ResourceLocation albedoMap,
                       @Nullable ResourceLocation emissiveMap,
@@ -95,6 +102,31 @@ public final class HgMaterial {
                       boolean doubleSided,
                       float reflectivity,
                       float sunSpecular) {
+        this(id, albedoMap, emissiveMap, metallicMap, roughnessMap, normalMap, packedMetallicRoughness,
+                tiling, offset, metallic, smoothness, tint, emissiveColor, emissiveStrength, alphaMode,
+                alphaCutoff, doubleSided, reflectivity, sunSpecular, 1.0F);
+    }
+
+    public HgMaterial(ResourceLocation id,
+                      @Nullable ResourceLocation albedoMap,
+                      @Nullable ResourceLocation emissiveMap,
+                      @Nullable ResourceLocation metallicMap,
+                      @Nullable ResourceLocation roughnessMap,
+                      @Nullable ResourceLocation normalMap,
+                      boolean packedMetallicRoughness,
+                      Vector2f tiling,
+                      Vector2f offset,
+                      float metallic,
+                      float smoothness,
+                      Vector4f tint,
+                      Vector3f emissiveColor,
+                      float emissiveStrength,
+                      AlphaMode alphaMode,
+                      float alphaCutoff,
+                      boolean doubleSided,
+                      float reflectivity,
+                      float sunSpecular,
+                      float occlusion) {
         this.id = id;
         this.albedoMap = albedoMap;
         this.emissiveMap = emissiveMap;
@@ -114,6 +146,7 @@ public final class HgMaterial {
         this.doubleSided = doubleSided;
         this.reflectivity = reflectivity;
         this.sunSpecular = sunSpecular;
+        this.occlusion = Float.isFinite(occlusion) ? clamp01(occlusion) : 1.0F;
     }
 
     public ResourceLocation id() {
@@ -178,7 +211,8 @@ public final class HgMaterial {
                 clamp01(GsonHelper.getAsFloat(json, "alpha_cutoff", 0.5F)),
                 GsonHelper.getAsBoolean(json, "double_sided", false),
                 Math.max(0.0F, GsonHelper.getAsFloat(json, "reflectivity", 1.0F)),
-                Math.max(0.0F, GsonHelper.getAsFloat(json, "sun_specular", 1.0F)));
+                Math.max(0.0F, GsonHelper.getAsFloat(json, "sun_specular", 1.0F)),
+                GsonHelper.getAsFloat(json, "occlusion", 1.0F));
     }
 
     /**
@@ -228,7 +262,24 @@ public final class HgMaterial {
                 new Vector2f(newTiling), new Vector2f(newOffset), this.metallic, this.smoothness,
                 new Vector4f(this.tint), new Vector3f(this.emissiveColor), this.emissiveStrength,
                 this.alphaMode, this.alphaCutoff, this.doubleSided, this.reflectivity,
-                this.sunSpecular);
+                this.sunSpecular, this.occlusion);
+    }
+
+    /**
+     * Returns a copy under a new id with different surface values and the same textures and UV
+     * transform, for editing a material at runtime without touching the one it came from. An
+     * {@code alphaMode} of {@link AlphaMode#BLEND} moves the copy to the blended pass.
+     */
+    public HgMaterial withSurface(ResourceLocation newId, Vector4f newTint, float newMetallic,
+                                  float newSmoothness, Vector3f newEmissiveColor,
+                                  float newEmissiveStrength, AlphaMode newAlphaMode,
+                                  float newOcclusion) {
+        return new HgMaterial(newId, this.albedoMap, this.emissiveMap, this.metallicMap,
+                this.roughnessMap, this.normalMap, this.packedMetallicRoughness,
+                new Vector2f(this.tiling), new Vector2f(this.offset), clamp01(newMetallic),
+                clamp01(newSmoothness), new Vector4f(newTint), new Vector3f(newEmissiveColor),
+                Math.max(0.0F, newEmissiveStrength), newAlphaMode, this.alphaCutoff,
+                this.doubleSided, this.reflectivity, this.sunSpecular, newOcclusion);
     }
 
     // -------------------------------------------------------------------- helpers

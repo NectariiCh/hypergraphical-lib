@@ -9,9 +9,16 @@ import org.joml.Vector2f;
 import org.joml.Vector3f;
 import org.joml.Vector4f;
 
+import dev.nectariich.hypergraphical.HypergraphicalClient;
+import dev.nectariich.hypergraphical.mesh.GpuMesh;
+import dev.nectariich.hypergraphical.mesh.MeshBounds;
+
 import javax.annotation.Nullable;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * One renderable placement of a mesh in the world &mdash; the equivalent of a Unity
@@ -55,6 +62,9 @@ public final class ModelInstance {
     private ResourceLocation material;
     @Nullable
     private Map<String, ResourceLocation> submeshMaterials;
+    /** Materials per element, part then {@code usemtl} name; see {@link #setElementMaterial}. */
+    @Nullable
+    private Map<String, Map<String, ResourceLocation>> elementMaterials;
 
     private double x;
     private double y;
@@ -65,6 +75,11 @@ public final class ModelInstance {
 
     private boolean visible = true;
     private boolean visibleInProbes = true;
+
+    /** Parts drawn, or {@code null} for all of them; see {@link #showOnlyParts}. */
+    @Nullable
+    private Set<String> shownParts;
+    private final Set<String> hiddenParts = new HashSet<>();
     private boolean removed;
 
     /** Packed vanilla lightmap coordinate, or -1 to sample the world at this position. */
@@ -78,6 +93,16 @@ public final class ModelInstance {
     private float metallic = INHERIT;
     private float smoothness = INHERIT;
     private float emissiveStrength = INHERIT;
+
+    /** Exponent on the mesh's baked occlusion; see {@link #setOcclusionStrength}. */
+    private float occlusionStrength = 1.0F;
+
+    /** Glow per part; see {@link #setPartGlow}. {@code null} until something glows. */
+    @Nullable
+    private Map<String, Float> partGlow;
+    /** Glow per material element, part then material; see {@link #setElementGlow}. */
+    @Nullable
+    private Map<String, Map<String, Float>> elementGlow;
 
     /**
      * Rotation and scale baked into a matrix with zero translation. Recomputed only when the
@@ -145,6 +170,56 @@ public final class ModelInstance {
 
     public Map<String, ResourceLocation> submeshMaterials() {
         return this.submeshMaterials == null ? Collections.emptyMap() : this.submeshMaterials;
+    }
+
+    /**
+     * Overrides the material for one material element: the faces of {@code part} drawn with
+     * the {@code usemtl} material {@code material} (see {@link MeshInfo#elements()}). Wins over
+     * {@link #setSubmeshMaterial} for that element. {@code null} removes the override.
+     */
+    public ModelInstance setElementMaterial(String part, String material,
+                                            @Nullable ResourceLocation override) {
+        if (override == null) {
+            if (this.elementMaterials != null) {
+                Map<String, ResourceLocation> materials = this.elementMaterials.get(part);
+                if (materials != null) {
+                    materials.remove(material);
+                    if (materials.isEmpty()) {
+                        this.elementMaterials.remove(part);
+                    }
+                }
+            }
+            return this;
+        }
+        if (this.elementMaterials == null) {
+            this.elementMaterials = new java.util.HashMap<>(4);
+        }
+        this.elementMaterials.computeIfAbsent(part, k -> new java.util.HashMap<>(4))
+                .put(material, override);
+        return this;
+    }
+
+    /** Removes every {@link #setElementMaterial} override. */
+    public ModelInstance clearElementMaterials() {
+        this.elementMaterials = null;
+        return this;
+    }
+
+    /**
+     * Resolves the material for one sub-mesh by its part and {@code usemtl} name: an element
+     * override, then a sub-mesh override, then the instance material.
+     */
+    public ResourceLocation materialFor(String part, @Nullable String submesh) {
+        if (submesh != null && this.elementMaterials != null) {
+            Map<String, ResourceLocation> materials = this.elementMaterials.get(part);
+            if (materials != null) {
+                ResourceLocation override = materials.get(submesh);
+                if (override != null) {
+                    return override;
+                }
+            }
+        }
+        return materialFor(submesh);
     }
 
     /** Resolves the material for a named sub-mesh, falling back to the instance material. */
@@ -278,6 +353,68 @@ public final class ModelInstance {
         return cached;
     }
 
+    // --------------------------------------------------------------------- parts
+    /**
+     * Draws only the named parts. Parts are the {@code o} objects of the {@code .obj} (or its
+     * {@code g} groups, when it names no objects), so one model can be split across several
+     * instances, e.g. a body and a separately transformed handle.
+     */
+    public ModelInstance showOnlyParts(Collection<String> parts) {
+        this.shownParts = new HashSet<>(parts);
+        this.worldBounds = null;
+        return this;
+    }
+
+    /** Hides the named parts, on top of any {@link #showOnlyParts} filter. */
+    public ModelInstance hideParts(Collection<String> parts) {
+        this.hiddenParts.clear();
+        this.hiddenParts.addAll(parts);
+        this.worldBounds = null;
+        return this;
+    }
+
+    public ModelInstance showAllParts() {
+        this.shownParts = null;
+        this.hiddenParts.clear();
+        this.worldBounds = null;
+        return this;
+    }
+
+    public boolean isPartVisible(String part) {
+        return (this.shownParts == null || this.shownParts.contains(part))
+                && !this.hiddenParts.contains(part);
+    }
+
+    /**
+     * Model-space bounds of the parts this instance draws, or {@code null} until the mesh is
+     * resident (or when every part is hidden).
+     */
+    @Nullable
+    public MeshBounds localBounds() {
+        GpuMesh mesh = HypergraphicalClient.meshes().get(this.mesh);
+        if (mesh == null) {
+            return null;
+        }
+        MeshBounds out = null;
+        for (Map.Entry<String, MeshBounds> part : mesh.partBounds().entrySet()) {
+            if (isPartVisible(part.getKey())) {
+                out = out == null ? part.getValue() : out.union(part.getValue());
+            }
+        }
+        return out;
+    }
+
+    /**
+     * World-space box around what this instance draws: its visible parts' bounds under the
+     * full rotation, scale and position. Tighter than {@link #worldBounds}, which is a
+     * rotation-invariant sphere for culling. {@code null} until the mesh is resident.
+     */
+    @Nullable
+    public AABB hitbox() {
+        MeshBounds local = localBounds();
+        return local == null ? null : local.transform(localMatrix(), this.x, this.y, this.z);
+    }
+
     // ------------------------------------------------------------------ shading
     public boolean visible() {
         return this.visible && !this.removed;
@@ -372,6 +509,110 @@ public final class ModelInstance {
     public ModelInstance setEmissiveStrength(float emissiveStrength) {
         this.emissiveStrength = emissiveStrength;
         return this;
+    }
+
+    // ------------------------------------------------------------------ occlusion
+    public float occlusionStrength() {
+        return this.occlusionStrength;
+    }
+
+    /**
+     * How strongly this instance shows its mesh's baked ambient occlusion (see
+     * {@link HypergraphicalAPI#setOcclusionBaking}). Applied in the vertex shader as
+     * {@code pow(occlusion, strength)}: 0 turns occlusion off, 1 shows the baked value as is,
+     * and values up to 2 darken it further (a half-occluded 0.5 becomes 0.25 at 2). Clamped
+     * to 0..2. Default 1. Travels in the instance stream, so it never splits a batch. Has no
+     * visible effect on a mesh that is not baked, whose occlusion is 1 everywhere.
+     */
+    public ModelInstance setOcclusionStrength(float strength) {
+        this.occlusionStrength = Float.isFinite(strength)
+                ? Math.max(0.0F, Math.min(2.0F, strength)) : 1.0F;
+        return this;
+    }
+
+    // ----------------------------------------------------------------------- glow
+    /**
+     * Makes every sub-mesh of one part glow, for an indicator lamp or a lit lens.
+     *
+     * <p>Glow adds the surface's own albedo colour (texture times material tint times instance
+     * tint, in linear space) times {@code strength} as emission, lifts the vanilla lightmap
+     * term to full block light, and lifts the baked occlusion, so the part reads as lit even
+     * in a dark room. {@code strength} 1 is roughly "as bright as its colour"; values above 1
+     * saturate towards white. 0 or less removes the glow. Clamped to 16.
+     *
+     * <p>Glow is per sub-mesh in the instance stream, so changing it every frame is free and
+     * never splits a batch. A part that is hidden on this instance simply does not draw.
+     */
+    public ModelInstance setPartGlow(String part, float strength) {
+        if (!(strength > 0.0F)) {
+            if (this.partGlow != null) {
+                this.partGlow.remove(part);
+            }
+            return this;
+        }
+        if (this.partGlow == null) {
+            this.partGlow = new java.util.HashMap<>(4);
+        }
+        this.partGlow.put(part, Math.min(16.0F, strength));
+        return this;
+    }
+
+    /**
+     * Makes one material element glow: the faces of {@code part} drawn with the
+     * {@code usemtl} material {@code material} (see {@link MeshInfo#elements()}). Same
+     * meaning and range as {@link #setPartGlow}. When both a part glow and an element glow
+     * apply to a sub-mesh, the stronger one wins.
+     */
+    public ModelInstance setElementGlow(String part, String material, float strength) {
+        if (!(strength > 0.0F)) {
+            if (this.elementGlow != null) {
+                Map<String, Float> materials = this.elementGlow.get(part);
+                if (materials != null) {
+                    materials.remove(material);
+                    if (materials.isEmpty()) {
+                        this.elementGlow.remove(part);
+                    }
+                }
+            }
+            return this;
+        }
+        if (this.elementGlow == null) {
+            this.elementGlow = new java.util.HashMap<>(4);
+        }
+        this.elementGlow.computeIfAbsent(part, k -> new java.util.HashMap<>(4))
+                .put(material, Math.min(16.0F, strength));
+        return this;
+    }
+
+    /** Removes every part and element glow. */
+    public ModelInstance clearGlow() {
+        this.partGlow = null;
+        this.elementGlow = null;
+        return this;
+    }
+
+    /**
+     * The glow for one sub-mesh, identified by its part and material name: the stronger of
+     * its part glow and its element glow, 0 when neither is set.
+     */
+    public float glowFor(String part, String material) {
+        float glow = 0.0F;
+        if (this.partGlow != null) {
+            Float value = this.partGlow.get(part);
+            if (value != null) {
+                glow = value;
+            }
+        }
+        if (this.elementGlow != null) {
+            Map<String, Float> materials = this.elementGlow.get(part);
+            if (materials != null) {
+                Float value = materials.get(material);
+                if (value != null) {
+                    glow = Math.max(glow, value);
+                }
+            }
+        }
+        return glow;
     }
 
     // -------------------------------------------------------------------- probes

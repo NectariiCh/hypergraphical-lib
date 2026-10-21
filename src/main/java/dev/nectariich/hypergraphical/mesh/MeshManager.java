@@ -3,6 +3,7 @@ package dev.nectariich.hypergraphical.mesh;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.nectariich.hypergraphical.Hypergraphical;
+import dev.nectariich.hypergraphical.api.OcclusionSettings;
 import dev.nectariich.hypergraphical.material.HgMaterial;
 import dev.nectariich.hypergraphical.material.MaterialManager;
 import dev.nectariich.hypergraphical.mesh.obj.MtlLibrary;
@@ -11,7 +12,6 @@ import dev.nectariich.hypergraphical.mesh.obj.ObjMeshReader;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 
@@ -20,12 +20,18 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.ForkJoinWorkerThread;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * Mesh residency: turns a {@code .obj} resource path into a {@link GpuMesh}.
@@ -37,6 +43,25 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *
  * <p>Requests are fire-and-forget. {@link #get} returns {@code null} while a mesh is still in
  * flight and the renderer simply skips that instance for a frame or two.
+ *
+ * <h2>Baked ambient occlusion</h2>
+ *
+ * <p>Meshes whose location matches a rule registered through {@link #setOcclusionBaking} get
+ * per-vertex occlusion baked by {@link OcclusionBaker}. The mesh uploads first, un-occluded,
+ * and the bake starts at that moment on a dedicated low-priority pool; when it finishes its
+ * result is queued and patched into the mesh's occlusion buffer by the next
+ * {@link #processUploads}. So a model appears immediately and darkens in its crevices a moment
+ * later, and no frame ever waits for a bake. Results are cached by location, settings and
+ * geometry, so a resource reload or an evict-and-reload of an unchanged mesh reapplies the
+ * old bake a frame after upload instead of casting every ray again.
+ *
+ * <h2>Variants</h2>
+ *
+ * <p>A variant ({@link #registerVariant}) is a second resident copy of a mesh under a
+ * location of its own, read from another mesh's files. Residency, occlusion rules and the
+ * bake cache all go by location, so a variant is how one model is baked two ways at once.
+ * Its geometry, materials and textures are read from the source, under the source's name,
+ * so the auto materials and textures are the source's own and are not loaded twice.
  */
 public final class MeshManager implements ResourceManagerReloadListener {
 
@@ -47,7 +72,44 @@ public final class MeshManager implements ResourceManagerReloadListener {
     private final Set<ResourceLocation> failed = ConcurrentHashMap.newKeySet();
     private final Queue<Parsed> uploadQueue = new ConcurrentLinkedQueue<>();
 
+    /** Variant location to the location of the mesh whose files it is read from. */
+    private final Map<ResourceLocation, ResourceLocation> variants = new ConcurrentHashMap<>();
+
     private record Parsed(ResourceLocation id, ObjMeshReader.Result result, boolean emissiveAmbient) {}
+
+    /** One occlusion rule: meshes under {@code namespace:pathPrefix} bake with {@code settings}. */
+    private record OcclusionRule(String namespace, String pathPrefix, OcclusionSettings settings) {}
+
+    /** A bake in flight, cancelled when its mesh is evicted, replaced or cleared. */
+    private record BakeJob(GpuMesh target, AtomicBoolean cancelled) {}
+
+    /** A finished bake waiting for the render thread. */
+    private record BakeResult(ResourceLocation id, GpuMesh target, float[] occlusion) {}
+
+    /** A cached bake; reused only when the settings and the geometry both still match. */
+    private record CachedBake(OcclusionSettings settings, int geometryHash, float[] occlusion) {}
+
+    /** Most bakes kept for reuse. A bake is 4 bytes per vertex, so this is a few megabytes. */
+    private static final int BAKE_CACHE_SIZE = 64;
+
+    private final List<OcclusionRule> occlusionRules = new CopyOnWriteArrayList<>();
+    private final Map<ResourceLocation, BakeJob> bakes = new ConcurrentHashMap<>();
+    private final Queue<BakeResult> bakeResults = new ConcurrentLinkedQueue<>();
+    private final Map<ResourceLocation, CachedBake> bakeCache = new LinkedHashMap<>(16, 0.75F, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<ResourceLocation, CachedBake> eldest) {
+            return size() > BAKE_CACHE_SIZE;
+        }
+    };
+
+    /**
+     * The bake pool. Separate from Minecraft's background executor so a long bake never holds
+     * up resource loading or world generation work queued there, with half the cores so the
+     * game keeps the rest, and minimum-priority daemon threads so the OS prefers the render
+     * thread whenever they compete.
+     */
+    @Nullable
+    private static volatile ForkJoinPool bakePool;
 
     public MeshManager(MaterialManager materials) {
         this.materials = materials;
@@ -76,10 +138,9 @@ public final class MeshManager implements ResourceManagerReloadListener {
         return found;
     }
 
-    /** Whether a mesh resource exists, without triggering a load. */
+    /** Whether a mesh exists, as a runtime file or a resource, without triggering a load. */
     public static boolean exists(ResourceLocation rawId) {
-        return Minecraft.getInstance().getResourceManager()
-                .getResource(normalize(rawId)).isPresent();
+        return RuntimeAssets.exists(normalize(rawId));
     }
 
     public static ResourceLocation normalize(ResourceLocation id) {
@@ -112,33 +173,19 @@ public final class MeshManager implements ResourceManagerReloadListener {
         if (!this.pending.add(id)) {
             return;
         }
+        // A variant reads its source's files, under the source's name, and is resident
+        // under its own
+        ResourceLocation source = this.variants.getOrDefault(id, id);
         Util.backgroundExecutor().execute(() -> {
             try {
-                ResourceManager resources = Minecraft.getInstance().getResourceManager();
-
-                Optional<Resource> objResource = resources.getResource(id);
-                if (objResource.isEmpty()) {
+                ObjMeshReader.Result result = parse(source);
+                if (result == null) {
                     Hypergraphical.LOGGER.warn("[hypergraphical] Mesh not found: {}", id);
                     this.failed.add(id);
                     this.pending.remove(id);
                     return;
                 }
-
-                ObjImportSettings settings = readSettings(resources, id);
-
-                ObjMeshReader.Result result;
-                try (InputStream in = objResource.get().open()) {
-                    result = ObjMeshReader.read(in, id, settings,
-                            mtl -> resources.getResource(mtl)
-                                    .map(resource -> {
-                                        try {
-                                            return resource.open();
-                                        } catch (Exception e) {
-                                            return null;
-                                        }
-                                    })
-                                    .orElse(null));
-                }
+                ObjImportSettings settings = readSettings(source);
 
                 if (result.mesh().triangleCount() == 0) {
                     Hypergraphical.LOGGER.warn("[hypergraphical] Mesh {} has no triangles", id);
@@ -162,18 +209,38 @@ public final class MeshManager implements ResourceManagerReloadListener {
     }
 
     /**
+     * Parses a mesh on the calling thread, from a runtime file or a resource, without touching
+     * GL. {@code null} when the mesh does not exist.
+     */
+    @Nullable
+    public static ObjMeshReader.Result parse(ResourceLocation rawId) throws java.io.IOException {
+        ResourceLocation id = normalize(rawId);
+        try (InputStream in = RuntimeAssets.open(id)) {
+            if (in == null) {
+                return null;
+            }
+            return ObjMeshReader.read(in, id, readSettings(id), RuntimeAssets::open);
+        }
+    }
+
+    /**
      * Reads the optional sibling import settings file. For {@code foo.obj} that is
      * {@code foo.obj.json}.
      */
-    private static ObjImportSettings readSettings(ResourceManager resources, ResourceLocation objId) {
+    private static ObjImportSettings readSettings(ResourceLocation objId) {
         ResourceLocation settingsId = new ResourceLocation(objId.getNamespace(),
                 objId.getPath() + ".json");
-        Optional<Resource> resource = resources.getResource(settingsId);
-        if (resource.isEmpty()) {
+        InputStream stream;
+        try {
+            stream = RuntimeAssets.open(settingsId);
+        } catch (Exception e) {
+            stream = null;
+        }
+        if (stream == null) {
             return ObjImportSettings.DEFAULT;
         }
         try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(resource.get().open(), StandardCharsets.UTF_8))) {
+                new InputStreamReader(stream, StandardCharsets.UTF_8))) {
             JsonObject json = JsonParser.parseReader(reader).getAsJsonObject();
             return ObjImportSettings.fromJson(json);
         } catch (Exception e) {
@@ -188,6 +255,7 @@ public final class MeshManager implements ResourceManagerReloadListener {
      * Render thread, once per frame.
      */
     public void processUploads(int budget) {
+        applyBakes();
         for (int i = 0; i < budget; i++) {
             Parsed parsed = this.uploadQueue.poll();
             if (parsed == null) {
@@ -200,6 +268,7 @@ public final class MeshManager implements ResourceManagerReloadListener {
                     previous.close();
                 }
                 registerAutoMaterials(parsed);
+                startBake(parsed, mesh);
             } catch (Exception e) {
                 Hypergraphical.LOGGER.error("[hypergraphical] Failed to upload mesh {}",
                         parsed.id(), e);
@@ -231,6 +300,58 @@ public final class MeshManager implements ResourceManagerReloadListener {
         }
     }
 
+    /**
+     * Drops one mesh so the next request loads it again, e.g. after its runtime files changed
+     * or were removed. Render thread.
+     */
+    public void evict(ResourceLocation rawId) {
+        ResourceLocation id = normalize(rawId);
+        evictOne(id);
+        // Variants are read from this mesh's files, so they go with it
+        for (Map.Entry<ResourceLocation, ResourceLocation> variant : this.variants.entrySet()) {
+            if (variant.getValue().equals(id)) {
+                evictOne(variant.getKey());
+            }
+        }
+    }
+
+    private void evictOne(ResourceLocation id) {
+        cancelBake(id);
+        GpuMesh mesh = this.resident.remove(id);
+        if (mesh != null) {
+            mesh.close();
+        }
+        this.failed.remove(id);
+    }
+
+    // ----------------------------------------------------------------- variants
+    /**
+     * Makes {@code variant} a mesh of its own, read from {@code source}'s files. It loads
+     * on first request like any mesh and is matched against the occlusion rules by its own
+     * location, so it can be baked differently from the source. Registering the same pair
+     * again does nothing; pointing a variant at another source drops what it had loaded.
+     * Evicting the source evicts its variants with it. Render thread.
+     */
+    public void registerVariant(ResourceLocation rawVariant, ResourceLocation rawSource) {
+        ResourceLocation variant = normalize(rawVariant);
+        ResourceLocation source = normalize(rawSource);
+        if (variant.equals(source)) {
+            return;
+        }
+        ResourceLocation previous = this.variants.put(variant, source);
+        if (previous != null && !previous.equals(source)) {
+            evictOne(variant);
+        }
+    }
+
+    /** Forgets a variant and drops whatever was loaded for it. Render thread. */
+    public void removeVariant(ResourceLocation rawVariant) {
+        ResourceLocation variant = normalize(rawVariant);
+        if (this.variants.remove(variant) != null) {
+            evictOne(variant);
+        }
+    }
+
     @Override
     public void onResourceManagerReload(ResourceManager resourceManager) {
         // Meshes are dropped rather than reloaded eagerly: the renderer will request the ones
@@ -239,6 +360,11 @@ public final class MeshManager implements ResourceManagerReloadListener {
     }
 
     public void clear() {
+        for (BakeJob job : this.bakes.values()) {
+            job.cancelled().set(true);
+        }
+        this.bakes.clear();
+        this.bakeResults.clear();
         for (GpuMesh mesh : this.resident.values()) {
             mesh.close();
         }
@@ -246,6 +372,151 @@ public final class MeshManager implements ResourceManagerReloadListener {
         this.pending.clear();
         this.failed.clear();
         this.uploadQueue.clear();
+    }
+
+    // ------------------------------------------------------------- occlusion bake
+    /**
+     * Turns occlusion baking on for every mesh whose location is in {@code namespace} and
+     * whose path starts with {@code pathPrefix}, or off when {@code settings} is null. When
+     * several rules match a mesh the one with the longest prefix wins. Meshes already resident
+     * under the prefix are dropped so they reload with the new setting. Render thread.
+     */
+    public void setOcclusionBaking(String namespace, String pathPrefix,
+                                   @Nullable OcclusionSettings settings) {
+        this.occlusionRules.removeIf(rule -> rule.namespace().equals(namespace)
+                && rule.pathPrefix().equals(pathPrefix));
+        if (settings != null) {
+            this.occlusionRules.add(new OcclusionRule(namespace, pathPrefix, settings));
+        }
+        for (ResourceLocation id : List.copyOf(this.resident.keySet())) {
+            if (id.getNamespace().equals(namespace) && id.getPath().startsWith(pathPrefix)) {
+                evict(id);
+            }
+        }
+    }
+
+    /** The occlusion settings that apply to a mesh, or {@code null} when it is not baked. */
+    @Nullable
+    public OcclusionSettings occlusionFor(ResourceLocation rawId) {
+        ResourceLocation id = normalize(rawId);
+        OcclusionRule best = null;
+        for (OcclusionRule rule : this.occlusionRules) {
+            if (rule.namespace().equals(id.getNamespace())
+                    && id.getPath().startsWith(rule.pathPrefix())
+                    && (best == null || rule.pathPrefix().length() > best.pathPrefix().length())) {
+                best = rule;
+            }
+        }
+        return best == null ? null : best.settings();
+    }
+
+    /** Meshes whose occlusion bake is still running. */
+    public int bakingCount() {
+        return this.bakes.size();
+    }
+
+    private void startBake(Parsed parsed, GpuMesh mesh) {
+        cancelBake(parsed.id());
+        // Resolved at upload rather than at parse, so a rule registered while the mesh was
+        // being parsed still applies to it.
+        OcclusionSettings settings = occlusionFor(parsed.id());
+        if (settings == null) {
+            return;
+        }
+
+        BakeJob job = new BakeJob(mesh, new AtomicBoolean());
+        this.bakes.put(parsed.id(), job);
+        MeshData data = parsed.result().mesh();
+        bakePool().execute(() -> {
+            try {
+                // The cache check runs here too, not on the render thread: fingerprinting a
+                // large mesh is a millisecond or two that a frame should not pay for. A hit
+                // lands on the next frame like any finished bake.
+                int geometryHash = geometryHash(data);
+                CachedBake cached;
+                synchronized (this.bakeCache) {
+                    cached = this.bakeCache.get(parsed.id());
+                }
+                if (cached != null && cached.settings().equals(settings)
+                        && cached.geometryHash() == geometryHash
+                        && cached.occlusion().length == data.vertexCount()) {
+                    this.bakeResults.add(new BakeResult(parsed.id(), mesh, cached.occlusion()));
+                    return;
+                }
+
+                long started = System.nanoTime();
+                float[] occlusion = OcclusionBaker.bake(data, settings, job.cancelled()::get);
+                if (occlusion == null || job.cancelled().get()) {
+                    return;
+                }
+                synchronized (this.bakeCache) {
+                    this.bakeCache.put(parsed.id(),
+                            new CachedBake(settings, geometryHash, occlusion));
+                }
+                this.bakeResults.add(new BakeResult(parsed.id(), mesh, occlusion));
+                Hypergraphical.LOGGER.debug("[hypergraphical] Baked occlusion for {}: {} verts in {} ms",
+                        parsed.id(), occlusion.length, (System.nanoTime() - started) / 1_000_000L);
+            } catch (Throwable e) {
+                Hypergraphical.LOGGER.error("[hypergraphical] Occlusion bake failed for {}",
+                        parsed.id(), e);
+                this.bakes.remove(parsed.id(), job);
+            }
+        });
+    }
+
+    /** Patches finished bakes into their meshes, if those are still the resident ones. */
+    private void applyBakes() {
+        BakeResult result;
+        while ((result = this.bakeResults.poll()) != null) {
+            BakeJob job = this.bakes.get(result.id());
+            if (job != null && job.target() == result.target()) {
+                this.bakes.remove(result.id());
+            }
+            if (this.resident.get(result.id()) == result.target() && !result.target().closed()) {
+                result.target().updateOcclusion(result.occlusion());
+            }
+        }
+    }
+
+    private void cancelBake(ResourceLocation id) {
+        BakeJob job = this.bakes.remove(id);
+        if (job != null) {
+            job.cancelled().set(true);
+        }
+    }
+
+    /**
+     * A cheap fingerprint of a mesh's geometry, so a cached bake is only reused for the same
+     * vertices and triangles. Computed on the bake pool.
+     */
+    private static int geometryHash(MeshData mesh) {
+        return 31 * Arrays.hashCode(mesh.vertices()) + Arrays.hashCode(mesh.indices());
+    }
+
+    private static ForkJoinPool bakePool() {
+        ForkJoinPool pool = bakePool;
+        if (pool == null) {
+            synchronized (MeshManager.class) {
+                pool = bakePool;
+                if (pool == null) {
+                    int threads = Math.max(1, Runtime.getRuntime().availableProcessors() / 2);
+                    ClassLoader loader = MeshManager.class.getClassLoader();
+                    pool = new ForkJoinPool(threads, forkJoinPool -> {
+                        ForkJoinWorkerThread thread = ForkJoinPool.defaultForkJoinWorkerThreadFactory
+                                .newThread(forkJoinPool);
+                        thread.setName("Hypergraphical-Occlusion-" + thread.getPoolIndex());
+                        thread.setDaemon(true);
+                        thread.setPriority(Thread.MIN_PRIORITY);
+                        // Mod classes come from a transforming class loader; a worker left on
+                        // the system loader would fail on the first class it had to load.
+                        thread.setContextClassLoader(loader);
+                        return thread;
+                    }, null, false);
+                    bakePool = pool;
+                }
+            }
+        }
+        return pool;
     }
 
     public int residentCount() {

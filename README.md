@@ -166,6 +166,36 @@ Per-instance `setMetallic` / `setSmoothness` / `setEmissiveStrength` / `setTint`
 does — and **without splitting the instancing batch**, because those values travel in the
 per-instance vertex stream.
 
+### Baked ambient occlusion
+
+Opt meshes in by location prefix, before spawning them:
+
+```java
+HypergraphicalAPI.setOcclusionBaking("mymod", "props/", OcclusionSettings.STRONG);
+```
+
+Every matching mesh (runtime file or resource) gets per-vertex occlusion baked on a
+low-priority background pool after it uploads: cosine-weighted rays from each vertex, tested
+against the whole mesh through a BVH, within a radius relative to the model's size. The mesh
+draws un-occluded until the bake lands and no frame ever waits for it; bakes are cached, so
+a resource reload reapplies them without casting rays again. `OcclusionSettings(rays,
+radiusFraction, power)` tunes it. Meshes that match no rule read 1 everywhere.
+
+Per instance, `setOcclusionStrength(s)` applies `pow(ao, s)`: 0 off, 1 as baked, 2 squared.
+The shader applies occlusion "strong": in full to the lightmap ambient, probe diffuse and (via
+a specular-occlusion term) probe specular, and at half strength to the analytic sun, so
+crevices stay dark in daylight. Emissive and glow are never occluded. Occlusion lives on
+vertices, so it shows best on dense meshes; a big face made of two triangles cannot carry a
+contact shadow in its middle.
+
+### Glow
+
+`setPartGlow(part, strength)`, `setElementGlow(part, material, strength)` and `clearGlow()`
+make sub-meshes look lit: the surface's own albedo colour is added as emission, its block light
+is lifted to 15 and its occlusion is lifted away. Per sub-mesh in the instance stream, so it
+never splits a batch. `HypergraphicalAPI.inspectMesh(...).elements()` lists the (part,
+material) pairs a mesh has.
+
 ### Colour space
 
 Albedo, emissive and tint are treated as sRGB, decoded to linear, lit in linear, and
@@ -389,13 +419,16 @@ or flip `dev_with_oculus=true` in `gradle.properties`. Version pinned by `oculus
 
 ### Validation tools
 
-Both live in `tools/`, in their own source set so they never reach the mod jar, and both run
+All live in `tools/`, in their own source set so they never reach the mod jar, and all run
 against the real main classpath so they exercise the same code the game does.
 
 - **`gradlew checkShaders`** compiles and links every GLSL program in a hidden GL 3.3 core
   context using the same LWJGL Minecraft ships, and lists each program's active uniforms —
   which is how a silently stripped uniform or a mismatched `set()` call gets noticed. Needs a
   GPU, so it is not wired into `check`.
+- **`gradlew checkAo`** runs the occlusion bake on synthetic scenes: BVH any-hit against brute
+  force, a plate with a box on it (open surfaces bright, contact lines dark), determinism, a
+  100k-triangle timing, and `MeshInfo` elements. Needs no GPU.
 - **`gradlew checkObj`** runs the real `ObjMeshReader` over the shipped test assets and asserts
   index ranges, sub-mesh contiguity, unit normals, orthogonal tangents, finite values, and
   **face winding against normals**. That last one matters most: geometry wound the wrong way is

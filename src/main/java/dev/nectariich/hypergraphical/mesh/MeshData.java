@@ -4,6 +4,7 @@ import net.minecraft.resources.ResourceLocation;
 
 import javax.annotation.Nullable;
 import java.util.List;
+import java.util.Map;
 
 /**
  * CPU-side geometry, immediately before upload.
@@ -36,13 +37,16 @@ public final class MeshData {
     public static final int OFF_TANGENT = 8;
 
     /**
-     * One contiguous index range sharing a material, named after the {@code usemtl} that
-     * produced it so a multi-material export stays addressable from code.
+     * One contiguous index range sharing a material and a part. {@code name} is the
+     * {@code usemtl} that produced it, so a multi-material export stays addressable from code;
+     * {@code part} is the {@code o} (or, failing that, {@code g}) object it belongs to, so the
+     * pieces of a model can be told apart and drawn on their own.
      */
     public record SubMesh(String name,
                           int indexOffset,
                           int indexCount,
-                          @Nullable ResourceLocation autoMaterial) {}
+                          @Nullable ResourceLocation autoMaterial,
+                          String part) {}
 
     private final float[] vertices;
     private final int[] indices;
@@ -50,6 +54,7 @@ public final class MeshData {
     private final float[] boundsMin;
     private final float[] boundsMax;
     private final double boundingRadius;
+    private final Map<String, MeshBounds> partBounds;
 
     public MeshData(float[] vertices, int[] indices, List<SubMesh> subMeshes,
                     float[] boundsMin, float[] boundsMax) {
@@ -58,6 +63,7 @@ public final class MeshData {
         this.subMeshes = List.copyOf(subMeshes);
         this.boundsMin = boundsMin;
         this.boundsMax = boundsMax;
+        this.partBounds = MeshBounds.ofParts(vertices, indices, this.subMeshes);
 
         // Radius about the model ORIGIN, not the bounds centre: instances rotate about their
         // origin, so an origin-centred sphere is the one bound that stays valid under any
@@ -103,6 +109,15 @@ public final class MeshData {
 
     public float[] boundsMax() {
         return this.boundsMax;
+    }
+
+    public MeshBounds bounds() {
+        return MeshBounds.of(this.boundsMin, this.boundsMax);
+    }
+
+    /** Bounds of each part, keyed by part name, in the order the parts first appear. */
+    public Map<String, MeshBounds> partBounds() {
+        return this.partBounds;
     }
 
     /** Radius of a sphere centred on the model origin that contains the whole mesh. */

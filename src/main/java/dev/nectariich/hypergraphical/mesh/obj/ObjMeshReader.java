@@ -22,7 +22,8 @@ import java.util.Map;
  * <p>Handles the whole practical subset: {@code v}/{@code vt}/{@code vn}, all four face
  * reference forms ({@code v}, {@code v/vt}, {@code v//vn}, {@code v/vt/vn}), negative
  * (relative) indices, n-gon faces, {@code usemtl} grouping, {@code mtllib}, and
- * {@code g}/{@code o} names.
+ * {@code g}/{@code o} names. Faces are grouped by part (the {@code o} object, or the
+ * {@code g} group in files that have no objects) and by material within it.
  *
  * <p>Three things happen here that the vanilla pipeline cannot do for us:
  *
@@ -43,6 +44,11 @@ public final class ObjMeshReader {
 
     /** Mesh plus the material library it referenced, so callers can derive auto-materials. */
     public record Result(MeshData mesh, MtlLibrary materials, List<String> subMeshNames) {}
+
+    /** Part name given to faces that come before any {@code o} or {@code g}. */
+    public static final String DEFAULT_PART = "default";
+
+    private record GroupKey(String part, String material) {}
 
     private ObjMeshReader() {}
 
@@ -104,12 +110,15 @@ public final class ObjMeshReader {
         /** (v,vt,vn) triple -> output vertex index. */
         private final Long2IntOpenHashMap weld = new Long2IntOpenHashMap();
 
-        /** usemtl name -> index list, in first-appearance order. */
-        private final Map<String, IntArrayList> groups = new LinkedHashMap<>();
+        /** (part, usemtl name) -> index list, in first-appearance order. */
+        private final Map<GroupKey, IntArrayList> groups = new LinkedHashMap<>();
 
         private MtlLibrary materials = MtlLibrary.empty();
         private boolean sawNormals;
         private String currentMaterial = "default";
+        private String currentPart = DEFAULT_PART;
+        /** Once a file names objects, its {@code g} groups are sub-divisions, not parts. */
+        private boolean sawObject;
         private IntArrayList currentIndices;
 
         Parser(ResourceLocation objLocation, ObjImportSettings settings, MtlResolver mtlResolver) {
@@ -117,7 +126,13 @@ public final class ObjMeshReader {
             this.settings = settings;
             this.mtlResolver = mtlResolver;
             this.weld.defaultReturnValue(-1);
-            this.currentIndices = this.groups.computeIfAbsent("default", k -> new IntArrayList());
+            this.currentIndices = this.groups.computeIfAbsent(
+                    new GroupKey(DEFAULT_PART, "default"), k -> new IntArrayList());
+        }
+
+        private void select() {
+            this.currentIndices = this.groups.computeIfAbsent(
+                    new GroupKey(this.currentPart, this.currentMaterial), k -> new IntArrayList());
         }
 
         Result parse(InputStream in) throws IOException {
@@ -150,8 +165,18 @@ public final class ObjMeshReader {
                         case "f" -> face(line);
                         case "usemtl" -> {
                             this.currentMaterial = line.length > 1 ? line[1] : "default";
-                            this.currentIndices = this.groups.computeIfAbsent(
-                                    this.currentMaterial, k -> new IntArrayList());
+                            select();
+                        }
+                        case "o" -> {
+                            this.sawObject = true;
+                            this.currentPart = partName(line);
+                            select();
+                        }
+                        case "g" -> {
+                            if (!this.sawObject) {
+                                this.currentPart = partName(line);
+                                select();
+                            }
                         }
                         case "mtllib" -> {
                             if (this.settings.mtlOverride() == null && line.length > 1) {
@@ -159,13 +184,21 @@ public final class ObjMeshReader {
                             }
                         }
                         default -> {
-                            // g / o / s / vp / l / curv ... nothing we need.
+                            // s / vp / l / curv ... nothing we need.
                         }
                     }
                 }
             }
 
             return finish();
+        }
+
+        /** The name after {@code o}/{@code g}; names may contain spaces, so the rest is rejoined. */
+        private static String partName(String[] line) {
+            if (line.length < 2) {
+                return DEFAULT_PART;
+            }
+            return String.join(" ", java.util.Arrays.copyOfRange(line, 1, line.length));
         }
 
         private void loadMtl(ResourceLocation mtlLocation) {
@@ -316,7 +349,7 @@ public final class ObjMeshReader {
             List<MeshData.SubMesh> subMeshes = new ArrayList<>();
             List<String> names = new ArrayList<>();
             int cursor = 0;
-            for (Map.Entry<String, IntArrayList> entry : this.groups.entrySet()) {
+            for (Map.Entry<GroupKey, IntArrayList> entry : this.groups.entrySet()) {
                 IntArrayList list = entry.getValue();
                 if (list.isEmpty()) {
                     continue;
@@ -324,11 +357,15 @@ public final class ObjMeshReader {
                 for (int i = 0; i < list.size(); i++) {
                     indices[cursor + i] = list.getInt(i);
                 }
+                String material = entry.getKey().material();
                 ResourceLocation auto = this.settings.autoMaterials()
-                        ? autoMaterialId(this.objLocation, entry.getKey())
+                        ? autoMaterialId(this.objLocation, material)
                         : null;
-                subMeshes.add(new MeshData.SubMesh(entry.getKey(), cursor, list.size(), auto));
-                names.add(entry.getKey());
+                subMeshes.add(new MeshData.SubMesh(material, cursor, list.size(), auto,
+                        entry.getKey().part()));
+                if (!names.contains(material)) {
+                    names.add(material);
+                }
                 cursor += list.size();
             }
 

@@ -27,11 +27,17 @@ import static org.lwjgl.opengl.GL33C.*;
  *   16..19  vec4  tint rgba
  *   20..23  vec4  metallic, smoothness, emissiveStrength, probeBlend
  *   24..27  vec4  lightmap block, lightmap sky, uv offset x, uv offset y
+ *   28..31  vec4  occlusion strength, glow, 0, 0
  * </pre>
+ *
+ * <p>The last vec4 is at location {@value #ATTRIB_EXTRA}, not 11, because 11 is the mesh's
+ * per-vertex occlusion (see {@code GpuMesh#ATTRIB_OCCLUSION}). Its two spare channels are
+ * zero and free for the next per-instance value. Growing the record from 112 to 128 bytes
+ * costs nothing measurable and keeps each record on a 16-byte boundary.
  */
 public final class InstanceBuffer implements AutoCloseable {
 
-    public static final int FLOATS_PER_INSTANCE = 28;
+    public static final int FLOATS_PER_INSTANCE = 32;
     public static final int BYTES_PER_INSTANCE = FLOATS_PER_INSTANCE * Float.BYTES;
 
     /** First instance attribute location; see the vertex shader. */
@@ -39,6 +45,7 @@ public final class InstanceBuffer implements AutoCloseable {
     public static final int ATTRIB_TINT = 8;
     public static final int ATTRIB_PARAMS = 9;
     public static final int ATTRIB_LIGHT_UV = 10;
+    public static final int ATTRIB_EXTRA = 12;
 
     private int vbo;
     private FloatBuffer staging;
@@ -93,7 +100,8 @@ public final class InstanceBuffer implements AutoCloseable {
     public int push(Matrix4f model,
                     float tintR, float tintG, float tintB, float tintA,
                     float metallic, float smoothness, float emissive, float probeBlend,
-                    float lightBlock, float lightSky, float uvOffsetU, float uvOffsetV) {
+                    float lightBlock, float lightSky, float uvOffsetU, float uvOffsetV,
+                    float occlusionStrength, float glow) {
         ensureCapacity(1);
         int index = this.count++;
         int base = index * FLOATS_PER_INSTANCE;
@@ -114,6 +122,11 @@ public final class InstanceBuffer implements AutoCloseable {
         this.staging.put(base + 25, lightSky);
         this.staging.put(base + 26, uvOffsetU);
         this.staging.put(base + 27, uvOffsetV);
+
+        this.staging.put(base + 28, occlusionStrength);
+        this.staging.put(base + 29, glow);
+        this.staging.put(base + 30, 0.0F);
+        this.staging.put(base + 31, 0.0F);
 
         return index;
     }
@@ -138,7 +151,7 @@ public final class InstanceBuffer implements AutoCloseable {
      * {@code firstInstance}.
      *
      * <p>Attribute pointers are VAO state, so this has to be redone whenever a batch's offset
-     * changes. Seven calls per batch is nothing next to a draw call. On GL 4.2+ this could be
+     * changes. Eight calls per batch is nothing next to a draw call. On GL 4.2+ this could be
      * hoisted out entirely with {@code glDrawElementsInstancedBaseInstance}, which is worth
      * doing if batch counts ever reach the thousands.
      */
@@ -157,6 +170,7 @@ public final class InstanceBuffer implements AutoCloseable {
         pointer(ATTRIB_TINT, base + 16L * Float.BYTES);
         pointer(ATTRIB_PARAMS, base + 20L * Float.BYTES);
         pointer(ATTRIB_LIGHT_UV, base + 24L * Float.BYTES);
+        pointer(ATTRIB_EXTRA, base + 28L * Float.BYTES);
     }
 
     private static void pointer(int location, long offset) {

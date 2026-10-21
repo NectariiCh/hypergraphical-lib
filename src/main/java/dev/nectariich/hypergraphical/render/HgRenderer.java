@@ -98,6 +98,7 @@ public final class HgRenderer implements AutoCloseable {
 
     private final Matrix4f modelMatrix = new Matrix4f();
     private final Matrix4f viewProjection = new Matrix4f();
+    private final Matrix4f viewEyeScratch = new Matrix4f();
 
     /** Camera the pass currently being drawn renders from; see applyProbe. */
     private Vec3 passCameraPos = Vec3.ZERO;
@@ -274,8 +275,12 @@ public final class HgRenderer implements AutoCloseable {
             java.util.List<GpuMesh.SubMesh> subMeshes = mesh.subMeshes();
             for (int s = 0; s < subMeshes.size(); s++) {
                 GpuMesh.SubMesh subMesh = subMeshes.get(s);
+                if (!instance.isPartVisible(subMesh.part())) {
+                    continue;
+                }
                 HgMaterial material = this.materials.resolve(
-                        instance.materialFor(subMesh.name()), subMesh.autoMaterial());
+                        instance.materialFor(subMesh.part(), subMesh.name()),
+                        subMesh.autoMaterial());
                 if (material.blended() != wantBlend) {
                     continue;
                 }
@@ -366,10 +371,19 @@ public final class HgRenderer implements AutoCloseable {
                 float emissive = Float.isNaN(instance.emissiveStrength())
                         ? material.emissiveStrength : instance.emissiveStrength();
 
+                // Batches are per sub-mesh, so a per-part or per-element glow is just a lookup
+                // here. A glowing surface also lifts its block light towards 15, so the
+                // lightmap term stops darkening a lamp that is supposed to be lit.
+                float glow = instance.glowFor(batch.subMesh.part(), batch.subMesh.name());
+                if (glow > 0.0F) {
+                    lightBlock += (15.0F - lightBlock) * Math.min(1.0F, glow);
+                }
+
                 this.instanceBuffer.push(this.modelMatrix,
                         instance.tint().x, instance.tint().y, instance.tint().z, instance.tint().w,
                         metallic, smoothness, emissive, instance.probeBlend(),
-                        lightBlock, lightSky, instance.uvOffset().x, instance.uvOffset().y);
+                        lightBlock, lightSky, instance.uvOffset().x, instance.uvOffset().y,
+                        instance.occlusionStrength() * material.occlusion, glow);
             }
 
             batch.instanceCount = batch.instances.size();
@@ -382,9 +396,7 @@ public final class HgRenderer implements AutoCloseable {
                                    float partialTick) {
         shader.set("uViewProjection", this.viewProjection);
 
-        // Positions reach the shader camera-relative, so the eye is the origin and the view
-        // vector is simply -normalize(worldPos).
-        shader.set("uCameraPos", 0.0F, 0.0F, 0.0F);
+        setViewEye(shader);
 
         float[] fog = RenderSystem.getShaderFogColor();
         shader.set("uFogColor", fog[0], fog[1], fog[2], fog[3]);
@@ -421,6 +433,54 @@ public final class HgRenderer implements AutoCloseable {
 
         bindLightmap();
         bindBrdfLut();
+    }
+
+    /**
+     * Tells the shader where the eye is, in a form that works for any projection.
+     *
+     * <p>The eye is the one point every view ray passes through. For a perspective projection
+     * that is a real point (the camera, which in our camera-relative space is the origin, but
+     * a probe capture or a mod's projection may move it); for an orthographic projection the
+     * rays are parallel and the "point" is at infinity in the direction opposite the view.
+     * Both cases are the null space of the view-projection matrix: the homogeneous point
+     * {@code E} with {@code VP * E = (0, 0, z, 0)}, which is {@code inverse(VP) * (0, 0, 1, 0)}.
+     * The shader then computes the per-fragment view vector as
+     * {@code normalize(E.xyz - fragPos * E.w)}: {@code eye - fragPos} when {@code w = 1}, the
+     * constant direction towards the camera when {@code w = 0}, and the right thing for any
+     * blend of the two (a projection animating from perspective to orthographic).
+     *
+     * <p>The scale and sign of {@code E} are arbitrary, so it is normalised here: to
+     * {@code w = 1} when the eye is finite, otherwise to a unit vector pointing against the
+     * view direction (taken from the near and far points of the screen centre).
+     */
+    private void setViewEye(ShaderProgram shader) {
+        Matrix4f inverse = this.viewEyeScratch.set(this.viewProjection);
+        if (!Float.isFinite(inverse.determinant()) || inverse.determinant() == 0.0F) {
+            shader.set("uViewEye", 0.0F, 0.0F, 0.0F, 1.0F);
+            return;
+        }
+        inverse.invert();
+        org.joml.Vector4f eye = inverse.transform(new org.joml.Vector4f(0.0F, 0.0F, 1.0F, 0.0F));
+
+        float eyeLength = (float) Math.sqrt(eye.x * eye.x + eye.y * eye.y + eye.z * eye.z);
+        if (Math.abs(eye.w) > 1.0E-6F * Math.max(1.0F, eyeLength)) {
+            shader.set("uViewEye", eye.x / eye.w, eye.y / eye.w, eye.z / eye.w, 1.0F);
+            return;
+        }
+
+        // Orthographic: the screen centre's far point minus its near point is the view
+        // direction; the eye direction is its opposite.
+        org.joml.Vector4f near = inverse.transform(new org.joml.Vector4f(0.0F, 0.0F, -1.0F, 1.0F));
+        org.joml.Vector4f far = inverse.transform(new org.joml.Vector4f(0.0F, 0.0F, 1.0F, 1.0F));
+        float fx = far.x / far.w - near.x / near.w;
+        float fy = far.y / far.w - near.y / near.w;
+        float fz = far.z / far.w - near.z / near.w;
+        float length = (float) Math.sqrt(fx * fx + fy * fy + fz * fz);
+        if (!(length > 0.0F) || !Float.isFinite(length)) {
+            shader.set("uViewEye", 0.0F, 0.0F, 0.0F, 1.0F);
+            return;
+        }
+        shader.set("uViewEye", -fx / length, -fy / length, -fz / length, 0.0F);
     }
 
     private void setSunUniforms(ShaderProgram shader, float partialTick) {

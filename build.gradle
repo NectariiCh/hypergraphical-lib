@@ -139,6 +139,12 @@ tasks.named('jar', Jar).configure {
     finalizedBy 'reobfJar'
 }
 
+// reobfJar rewrites the jar in place to SRG names. When another mod's dev workspace
+// builds this one through includeBuild, that jar goes on its official-mapped run
+// classpath, so it must stay unobfuscated there.
+// ForgeGradle registers reobfJar late, hence matching rather than named.
+tasks.matching { it.name == 'reobfJar' }.configureEach { enabled = gradle.parent == null }
+
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs << '-Xlint:all,-processing,-serial'
@@ -160,7 +166,10 @@ publishing {
 //   gradlew checkObj       run the OBJ importer over the shipped test assets and assert
 //                          index ranges, sub-mesh coverage, unit normals, orthogonal
 //                          tangents and face winding
-//   gradlew checkAssets    both
+//   gradlew checkAo        run the ambient occlusion bake over synthetic scenes: BVH against
+//                          brute force, contact shadows where expected, determinism, a
+//                          100k-triangle timing, and MeshInfo elements
+//   gradlew checkAssets    all of the above
 //
 // checkShaders needs a GPU, so it is not wired into `check`; a headless machine would fail
 // it for the wrong reason.
@@ -179,6 +188,9 @@ tasks.register('checkShaders', JavaExec) {
     dependsOn tasks.named('toolsClasses')
     classpath = sourceSets.tools.runtimeClasspath
     mainClass = 'ShaderCheck'
+    // macOS only lets GLFW run on the process's first thread
+    if (System.getProperty('os.name').toLowerCase().contains('mac'))
+        jvmArgs '-XstartOnFirstThread'
     args file('src/main/resources/assets/hypergraphical').absolutePath
 }
 
@@ -191,8 +203,17 @@ tasks.register('checkObj', JavaExec) {
     args file('src/main/resources/assets/hypergraphical').absolutePath
 }
 
+tasks.register('checkAo', JavaExec) {
+    group = 'verification'
+    description = 'Validates the ambient occlusion bake and mesh element introspection.'
+    dependsOn tasks.named('toolsClasses')
+    classpath = sourceSets.tools.runtimeClasspath
+    mainClass = 'AoCheck'
+    args file('src/main/resources/assets/hypergraphical').absolutePath
+}
+
 tasks.register('checkAssets') {
     group = 'verification'
-    description = 'Runs both the shader and OBJ validators.'
-    dependsOn 'checkObj', 'checkShaders'
+    description = 'Runs the shader, OBJ and occlusion validators.'
+    dependsOn 'checkObj', 'checkAo', 'checkShaders'
 }

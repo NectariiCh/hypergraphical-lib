@@ -19,6 +19,8 @@ in vec2 vUv;
 in vec4 vTint;
 in vec4 vParams;      // metallic, smoothness, emissiveStrength, probeBlend
 in vec2 vLightLevels; // block 0..15, sky 0..15
+in float vOcclusion;  // baked ambient occlusion with the instance strength applied, 1 = open
+in float vGlow;       // per-sub-mesh glow strength, 0 = none
 
 out vec4 fragColor;
 
@@ -41,7 +43,9 @@ uniform float uSunSpecularScale;
 // -- lighting ----------------------------------------------------------------
 uniform sampler2D uLightMap;
 uniform sampler2D uBrdfLut;
-uniform vec3 uCameraPos;
+// The eye as a homogeneous point: (eye position, 1) for a perspective projection,
+// (unit direction towards the camera, 0) for an orthographic one. See HgRenderer#setViewEye.
+uniform vec4 uViewEye;
 uniform vec3 uSunDirection;
 uniform vec3 uSunColor;
 uniform float uSunIntensity;
@@ -113,7 +117,9 @@ void main() {
     if (!gl_FrontFacing) {
         n = -n;
     }
-    vec3 v = normalize(uCameraPos - vWorldPos);
+    // Works for perspective and orthographic projections alike: an orthographic view has
+    // parallel view rays, so "towards the camera" is a constant there, not -vWorldPos.
+    vec3 v = normalize(uViewEye.xyz - vWorldPos * uViewEye.w);
     float nDotV = max(dot(n, v), 1e-4);
     vec3 reflection = reflect(-v, n);
 
@@ -128,6 +134,16 @@ void main() {
     float skyVisibility = levels.y / 15.0;
     float blockLight = levels.x / 15.0;
 
+    // ---------------------------------------------------------- ambient occlusion
+    // Baked per vertex (see OcclusionBaker). "Strong" on purpose: it scales every indirect
+    // term in full, the lightmap ambient and probe diffuse below and the probe or fallback
+    // specular through a specular-occlusion factor, and also the analytic sun term by half
+    // as much, so crevices stay dark in daylight instead of being lit back up by the sun.
+    // A glowing surface is lit from within, so glow lifts its occlusion away.
+    float ao = mix(clamp(vOcclusion, 0.0, 1.0), 1.0, clamp(vGlow, 0.0, 1.0));
+    float specularAo = hgSpecularOcclusion(nDotV, ao, roughness);
+    float sunAo = mix(1.0, ao, 0.5);
+
     // ------------------------------------------------------------ diffuse (IBL)
     vec3 ambient = lightmap;
     if (uHasProbeA && uIblDiffuse > 0.0) {
@@ -140,7 +156,7 @@ void main() {
         // torchlight comes from the torch, not from the environment.
         ambient *= mix(vec3(1.0), tint, uIblDiffuse * skyVisibility);
     }
-    vec3 color = diffuseColor * ambient;
+    vec3 color = diffuseColor * ambient * ao;
 
     // ----------------------------------------------------------- specular (IBL)
     // The split-sum scale factor, independent of where the radiance comes from.
@@ -165,7 +181,7 @@ void main() {
         // A probe baked outdoors must not light a sealed room. Gating on local light keeps a
         // metal in a dark cave dark, which no amount of probe accuracy would do on its own.
         float gate = max(skyVisibility, blockLight * 0.6);
-        color += radiance * specularScale * gate;
+        color += radiance * specularScale * gate * specularAo;
     } else {
         // No probe: still baking, evicted by the active budget, or probes turned off.
         //
@@ -174,7 +190,7 @@ void main() {
         // alternative is worse than wrong. A metal has no diffuse term (diffuseColor is
         // albedo * (1 - metallic)), so with no specular source at all it renders pure black,
         // which reads as a bug rather than as an unlit surface.
-        color += lightmap * specularScale;
+        color += lightmap * specularScale * specularAo;
     }
 
     // -------------------------------------------------------- specular (analytic)
@@ -193,7 +209,8 @@ void main() {
             vec3 f = hgFresnelSchlick(vDotH, f0);
 
             vec3 specular = (d * g * f) / max(4.0 * nDotV * nDotL, 1e-4) * nDotL;
-            color += specular * uSunColor * uSunIntensity * uSunSpecularScale * skyVisibility;
+            color += specular * uSunColor * uSunIntensity * uSunSpecularScale * skyVisibility
+                   * sunAo;
         }
     }
 
@@ -203,6 +220,10 @@ void main() {
         emissive *= hgSrgbToLinear(texture(uEmissiveMap, vUv).rgb);
     }
     color += emissive;
+
+    // Glow: the surface's own colour as emission, so a lit lens shows its colour in the
+    // dark. Like emissive it is never occluded.
+    color += albedo * vGlow;
 
     // ------------------------------------------------------------------- output
     color = hgLinearToSrgb(color);

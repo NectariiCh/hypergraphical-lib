@@ -2,15 +2,13 @@ package dev.nectariich.hypergraphical.material;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import dev.nectariich.hypergraphical.Hypergraphical;
+import dev.nectariich.hypergraphical.mesh.RuntimeAssets;
 import net.minecraft.Util;
-import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.server.packs.resources.Resource;
 
 import javax.annotation.Nullable;
 import java.io.InputStream;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -91,17 +89,15 @@ public final class TextureBank {
         }
         Util.backgroundExecutor().execute(() -> {
             try {
-                Optional<Resource> resource = Minecraft.getInstance().getResourceManager()
-                        .getResource(location);
-                if (resource.isEmpty()) {
-                    Hypergraphical.LOGGER.warn("[hypergraphical] Material texture not found: {}",
-                            location);
-                    this.failed.add(location);
-                    this.pending.remove(location);
-                    return;
-                }
                 NativeImage image;
-                try (InputStream in = resource.get().open()) {
+                try (InputStream in = RuntimeAssets.open(location)) {
+                    if (in == null) {
+                        Hypergraphical.LOGGER.warn("[hypergraphical] Material texture not found: {}",
+                                location);
+                        this.failed.add(location);
+                        this.pending.remove(location);
+                        return;
+                    }
                     image = NativeImage.read(in);
                 }
                 this.uploadQueue.add(new Decoded(location, image));
@@ -139,6 +135,15 @@ public final class TextureBank {
                 this.pending.remove(decoded.location());
             }
         }
+    }
+
+    /** Drops one texture so the next request loads it again. Render thread. */
+    public void evict(ResourceLocation location) {
+        HgTexture texture = this.resident.remove(location);
+        if (texture != null) {
+            texture.close();
+        }
+        this.failed.remove(location);
     }
 
     public boolean isResident(ResourceLocation location) {
