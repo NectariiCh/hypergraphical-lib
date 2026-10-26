@@ -129,8 +129,10 @@ void main() {
     // ------------------------------------------------------------ vanilla light
     vec2 levels = clamp(vLightLevels, vec2(0.0), vec2(15.0));
     // Vanilla's lightmap is 16x16 indexed by light level; +0.5 samples texel centres and
-    // lets the linear filter interpolate between levels.
-    vec3 lightmap = texture(uLightMap, (levels + 0.5) / 16.0).rgb;
+    // lets the linear filter interpolate between levels. Vanilla multiplies it straight into
+    // sRGB colour, so it is decoded here to light the linear albedo by the same amount;
+    // used raw, the final encode would lift every dim level well above vanilla.
+    vec3 lightmap = hgSrgbToLinear(texture(uLightMap, (levels + 0.5) / 16.0).rgb);
     float skyVisibility = levels.y / 15.0;
     float blockLight = levels.x / 15.0;
 

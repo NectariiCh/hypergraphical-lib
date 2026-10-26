@@ -357,12 +357,11 @@ public final class HgRenderer implements AutoCloseable {
                 this.modelMatrix.m31((float) (instance.y() - cameraPos.y));
                 this.modelMatrix.m32((float) (instance.z() - cameraPos.z));
 
-                // LightTexture#block/#sky return the packed component still shifted left by
-                // four (0..240), because vanilla indexes its 16x16 lightmap with UV2/16.
-                // Dividing by 16 recovers the 0..15 light level the shader wants.
+                // LightTexture#block/#sky already shift the packed light back down to the
+                // 0..15 light level the shader wants, so they need no further scaling.
                 int packedLight = HgScene.lightOf(instance);
-                float lightBlock = LightTexture.block(packedLight) / 16.0F;
-                float lightSky = LightTexture.sky(packedLight) / 16.0F;
+                float lightBlock = LightTexture.block(packedLight);
+                float lightSky = LightTexture.sky(packedLight);
 
                 float metallic = Float.isNaN(instance.metallic())
                         ? material.metallic : instance.metallic();
