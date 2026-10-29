@@ -1,6 +1,7 @@
 package dev.nectariich.hypergraphical.mesh.obj;
 
 import dev.nectariich.hypergraphical.Hypergraphical;
+import dev.nectariich.hypergraphical.util.HgIds;
 import net.minecraft.resources.ResourceLocation;
 
 import javax.annotation.Nullable;
@@ -249,7 +250,7 @@ public final class MtlLibrary {
         }
         if (path.indexOf(':') >= 0) {
             try {
-                return new ResourceLocation(path);
+                return HgIds.parse(path);
             } catch (Exception e) {
                 Hypergraphical.LOGGER.warn("[hypergraphical] Bad resource path '{}' in {}", raw, base);
                 return Hypergraphical.id("missing");
@@ -278,6 +279,6 @@ public final class MtlLibrary {
                 stack.addLast(segment);
             }
         }
-        return new ResourceLocation(base.getNamespace(), String.join("/", stack));
+        return HgIds.of(base.getNamespace(), String.join("/", stack));
     }
 }

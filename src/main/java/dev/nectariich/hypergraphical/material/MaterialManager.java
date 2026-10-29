@@ -3,6 +3,7 @@ package dev.nectariich.hypergraphical.material;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.nectariich.hypergraphical.Hypergraphical;
+import dev.nectariich.hypergraphical.util.HgIds;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.Resource;
 import net.minecraft.server.packs.resources.ResourceManager;
@@ -63,7 +64,7 @@ public final class MaterialManager implements ResourceManagerReloadListener {
             ResourceLocation file = entry.getKey();
             String path = file.getPath();
             String name = path.substring(DIRECTORY.length() + 1, path.length() - SUFFIX.length());
-            ResourceLocation id = new ResourceLocation(file.getNamespace(), name);
+            ResourceLocation id = HgIds.of(file.getNamespace(), name);
 
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(entry.getValue().open(), StandardCharsets.UTF_8))) {

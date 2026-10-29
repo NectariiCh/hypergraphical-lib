@@ -9,6 +9,7 @@ import dev.nectariich.hypergraphical.material.MaterialManager;
 import dev.nectariich.hypergraphical.mesh.obj.MtlLibrary;
 import dev.nectariich.hypergraphical.mesh.obj.ObjImportSettings;
 import dev.nectariich.hypergraphical.mesh.obj.ObjMeshReader;
+import dev.nectariich.hypergraphical.util.HgIds;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
 import net.minecraft.resources.ResourceLocation;
@@ -145,7 +146,7 @@ public final class MeshManager implements ResourceManagerReloadListener {
 
     public static ResourceLocation normalize(ResourceLocation id) {
         return id.getPath().endsWith(".obj") ? id
-                : new ResourceLocation(id.getNamespace(), id.getPath() + ".obj");
+                : HgIds.of(id.getNamespace(), id.getPath() + ".obj");
     }
 
     /**
@@ -228,7 +229,7 @@ public final class MeshManager implements ResourceManagerReloadListener {
      * {@code foo.obj.json}.
      */
     private static ObjImportSettings readSettings(ResourceLocation objId) {
-        ResourceLocation settingsId = new ResourceLocation(objId.getNamespace(),
+        ResourceLocation settingsId = HgIds.of(objId.getNamespace(),
                 objId.getPath() + ".json");
         InputStream stream;
         try {

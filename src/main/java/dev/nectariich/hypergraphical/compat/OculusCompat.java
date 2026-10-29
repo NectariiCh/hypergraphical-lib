@@ -31,7 +31,14 @@ import java.lang.reflect.Method;
  */
 public final class OculusCompat {
 
+    //? if forge {
     private static final String OCULUS = "oculus";
+    private static final String NAME = "Oculus";
+    //?} else {
+    /*// Oculus has no 1.21.1 build; Iris itself runs on NeoForge there, with the same IrisApi.
+    private static final String OCULUS = "iris";
+    private static final String NAME = "Iris";
+    *///?}
     private static final String IRIS_API = "net.irisshaders.iris.api.v0.IrisApi";
 
     private static Boolean present;
@@ -82,10 +89,10 @@ public final class OculusCompat {
             Class<?> api = Class.forName(IRIS_API);
             apiInstance = api.getMethod("getInstance").invoke(null);
             shaderPackInUse = api.getMethod("isShaderPackInUse");
-            Hypergraphical.LOGGER.info("[hypergraphical] Oculus detected; IrisApi bound");
+            Hypergraphical.LOGGER.info("[hypergraphical] {} detected; IrisApi bound", NAME);
         } catch (Exception e) {
-            Hypergraphical.LOGGER.warn("[hypergraphical] Oculus is present but IrisApi could not "
-                    + "be bound ({}). Shader-pack-aware behaviour is disabled.", e.toString());
+            Hypergraphical.LOGGER.warn("[hypergraphical] {} is present but IrisApi could not "
+                    + "be bound ({}). Shader-pack-aware behaviour is disabled.", NAME, e.toString());
         }
     }
 
@@ -104,8 +111,8 @@ public final class OculusCompat {
             String version = ModList.get().getModContainerById(OCULUS)
                     .map(container -> container.getModInfo().getVersion().toString())
                     .orElse("unknown");
-            Hypergraphical.LOGGER.info("[hypergraphical] Oculus {} present - probe capture will "
-                    + "fall back to procedural environment while a pack is enabled", version);
+            Hypergraphical.LOGGER.info("[hypergraphical] {} {} present - probe capture will "
+                    + "fall back to procedural environment while a pack is enabled", NAME, version);
         }
     }
 }

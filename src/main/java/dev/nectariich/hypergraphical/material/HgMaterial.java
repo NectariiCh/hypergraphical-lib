@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import dev.nectariich.hypergraphical.Hypergraphical;
 import dev.nectariich.hypergraphical.mesh.obj.MtlLibrary;
+import dev.nectariich.hypergraphical.util.HgIds;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
 import org.joml.Vector2f;
@@ -289,7 +290,7 @@ public final class HgMaterial {
         if (raw == null || raw.isEmpty()) {
             return fallback;
         }
-        return new ResourceLocation(raw);
+        return HgIds.parse(raw);
     }
 
     private static Vector2f vec2(JsonObject json, String key, float dx, float dy) {

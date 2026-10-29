@@ -1,6 +1,6 @@
 # Hypergraphical Lib
 
-Unity-style runtime model rendering for Minecraft **Forge 1.20.1**.
+Unity-style runtime model rendering for Minecraft **Forge 1.20.1** and **NeoForge 1.21.1**.
 
 Loads `.obj` files at runtime and draws them at arbitrary world coordinates with PBR
 materials — tiling/offset UVs, emissive maps, metallic and smoothness — lit by real
@@ -8,8 +8,9 @@ reflection probes that capture the actual world into a cubemap.
 
 - **Mod id:** `hypergraphical`
 - **Author:** nectariich
-- **Requires:** Forge 47+, **Embeddium** (hard dependency), Java 17
-- **Optional:** Oculus (see [Compatibility](#compatibility))
+- **Requires on 1.20.1:** Forge 47+, **Embeddium** (hard dependency), Java 17
+- **Requires on 1.21.1:** NeoForge 21.1+, **Sodium** 0.6+ (hard dependency), Java 21
+- **Optional:** Oculus on 1.20.1, Iris on 1.21.1 (see [Compatibility](#compatibility))
 
 ---
 
@@ -322,6 +323,9 @@ hundred thousand instances the answer is GPU culling with an indirect draw buffe
 
 ### Embeddium (required)
 
+On 1.21.1 Sodium takes this role, required in `neoforge.mods.toml`: Embeddium stopped updating
+for NeoForge 1.21.1 and Iris refuses to run with it. Everything below applies to both.
+
 Declared `mandatory = true` in `mods.toml`. We rely on it for a GL 3.3+ core context — which
 is what lets us use instanced arrays unconditionally, Minecraft's own baseline being 3.2 — and
 we never touch its chunk meshing, vertex formats or shaders. The only things shared are the
@@ -335,6 +339,9 @@ setting state behind its back leaves that cache lying, and the corruption then s
 after an unrelated mod happens to set the same state.
 
 ### Oculus (optional)
+
+On 1.21.1 the same code checks for Iris, which runs on NeoForge itself and has the same
+`IrisApi`. Oculus has no 1.21.1 build.
 
 Detected entirely through reflection on `IrisApi` — the one part Oculus declares stable.
 Compiling against it would mean our jar refuses to load whenever it bumps, for the sake of a
@@ -385,42 +392,69 @@ Shaders and materials also hot-reload on **F3 + T**.
 
 ## Building
 
+One source tree builds both versions through [Stonecutter](https://stonecutter.kikugie.dev)
+and ModDevGradle. Each version is a Gradle project (a "node") under `versions/`:
+
+- `:1.20.1-forge`: Forge 47.4.6, Java 17, ModDevGradle `legacyforge`
+- `:1.21.1-neoforge`: NeoForge 21.1.265, Java 21, ModDevGradle `neoforge`
+
 ```
-gradlew build          # -> build/libs/hypergraphical-<version>+mc1.20.1.jar
-gradlew runClient
-gradlew checkAssets    # shader + OBJ validation, see below
+gradlew build                               # both jars
+gradlew :1.20.1-forge:build                 # -> versions/1.20.1-forge/build/libs/hypergraphical-forge-<version>+mc1.20.1.jar
+gradlew :1.21.1-neoforge:build              # -> versions/1.21.1-neoforge/build/libs/hypergraphical-neoforge-<version>+mc1.21.1.jar
+gradlew :1.20.1-forge:runClient
+gradlew :1.21.1-neoforge:runClient
+gradlew :1.20.1-forge:checkAssets           # shader + OBJ validation, see below
 ```
 
-`gradle.properties` pins `org.gradle.java.home` to a JDK 17 install — ForgeGradle 6 requires
-the Gradle daemon itself to run on 17. Adjust that line for your machine.
+The Gradle daemon runs on JDK 21 (Stonecutter requires it). `gradle/gradle-daemon-jvm.properties`
+pins that, so no machine path is needed; the per-node toolchains pick JDK 17 and 21.
+
+Maven coordinates are `dev.nectariich.hypergraphical:hypergraphical-forge` and
+`dev.nectariich.hypergraphical:hypergraphical-neoforge`, version `<mod_version>+mc<minecraft>`.
+A consumer that includes this build maps each coordinate to its node with
+`dependencySubstitution` and depends on it with plain `implementation`; ModDevGradle hands the
+1.20.1 consumer the unobfuscated jar on its own.
+
+### Version-specific code
+
+`src/` is shared and committed in its 1.20.1 form. Differences are written as Stonecutter
+comments (`//? if forge {` ... `//?} else {` ... `//?}`), plus two renames in
+`stonecutter.gradle.kts`. Per-node versions live in `stonecutter.properties.toml`.
+`util/HgIds` hides the `ResourceLocation` factory change so call sites stay identical.
+
+To edit with the 1.21.1 form in `src/` (for IDE navigation), run
+`gradlew "Set active project to 1.21.1-neoforge"`, and `gradlew "Reset active project"`
+before committing.
 
 ### Dev-run mods
 
-Embeddium is a hard dependency, so `runClient` would refuse to start without it. It is supplied
-automatically: `gradle.properties` pins `embeddium_version`, and the jar is pulled from the
-Modrinth maven, remapped to the dev mappings with `fg.deobf`, and put on the run classpath. No
-manual copying into `run/mods`.
+The required renderer mod is supplied automatically: Embeddium on 1.20.1 (remapped to the dev
+mappings by ModDevGradle) and Sodium on 1.21.1, both pulled from the Modrinth maven and put on
+the run classpath. No manual copying into `run/mods`.
 
-It goes through a `devRuntime` configuration that only extends `runtimeClasspath`, never
+They go through a `devRuntime` configuration that only extends `runtimeClasspath`, never
 `runtimeElements`. `runtimeOnly` would have worked for the run too, but it would also land in
-our published POM, and then anyone depending on this library inherits a production-obfuscated
-mod jar they have to `fg.deobf` themselves. `mods.toml` already states the requirement, and
-that is the mechanism the mod loader enforces.
+our published metadata, and then anyone depending on this library inherits the mod. The mods
+toml already states the requirement, and that is the mechanism the mod loader enforces.
 
-Oculus is **off** by default — with no shader pack enabled it behaves identically to not being
-installed, so loading it just doubles the third-party mixin surface in the dev environment. To
-exercise the shader-pack path (probe downgrade, stage overrides):
+The shader mod (Oculus on 1.20.1, Iris on 1.21.1) is **off** by default. With no shader pack
+enabled it behaves identically to not being installed, so loading it just doubles the
+third-party mixin surface in the dev environment. To exercise the shader-pack path (probe
+downgrade, stage overrides):
 
 ```
-gradlew runClient -Pdev_with_oculus=true
+gradlew :1.20.1-forge:runClient -Pdev_with_oculus=true
 ```
 
-or flip `dev_with_oculus=true` in `gradle.properties`. Version pinned by `oculus_version`.
+or flip `dev_with_oculus=true` in `gradle.properties`. Versions are pinned by `oculus_version`
+and `iris_version`.
 
 ### Validation tools
 
 All live in `tools/`, in their own source set so they never reach the mod jar, and all run
-against the real main classpath so they exercise the same code the game does.
+against the real main classpath so they exercise the same code the game does. They are wired
+on the 1.20.1 node only (`gradlew :1.20.1-forge:checkObj` and so on).
 
 - **`gradlew checkShaders`** compiles and links every GLSL program in a hidden GL 3.3 core
   context using the same LWJGL Minecraft ships, and lists each program's active uniforms —

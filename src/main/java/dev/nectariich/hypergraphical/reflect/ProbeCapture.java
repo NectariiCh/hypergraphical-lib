@@ -20,6 +20,8 @@ import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
+//? if neoforge
+//import org.joml.Matrix4fStack;
 
 import javax.annotation.Nullable;
 import java.util.Map;
@@ -209,8 +211,13 @@ public final class ProbeCapture implements AutoCloseable {
         RenderSystem.backupProjectionMatrix();
 
         int previousFramebuffer = glGetInteger(GL_FRAMEBUFFER_BINDING);
+        //? if forge {
         PoseStack modelViewStack = RenderSystem.getModelViewStack();
         modelViewStack.pushPose();
+        //?} else {
+        /*Matrix4fStack modelViewStack = RenderSystem.getModelViewStack();
+        modelViewStack.pushMatrix();
+        *///?}
 
         try {
             float yaw = FACE_ANGLES[face][0];
@@ -240,11 +247,20 @@ public final class ProbeCapture implements AutoCloseable {
             RenderSystem.clear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT, Minecraft.ON_OSX);
             glDisable(GL_SCISSOR_TEST);
 
+            //? if forge {
             // A tight upload deadline stops chunk meshing from piling onto a capture frame.
             long deadline = Util.getNanos() + 500_000L;
             minecraft.levelRenderer.renderLevel(pose, partialTick, deadline, false,
                     this.camera, minecraft.gameRenderer, minecraft.gameRenderer.lightTexture(),
                     projection);
+            //?} else {
+            /*// 1.21.1 takes the view rotation as a matrix (it pushes it onto the model-view
+            // stack itself) and reads the partial tick from the frame's DeltaTracker. The
+            // chunk upload deadline is gone from this signature.
+            minecraft.levelRenderer.renderLevel(minecraft.getTimer(), false,
+                    this.camera, minecraft.gameRenderer, minecraft.gameRenderer.lightTexture(),
+                    pose.last().pose(), projection);
+            *///?}
 
             // The whole strategy rests on our small viewport surviving renderLevel, which it
             // does only because every bindWrite in there passes setViewport = false. If a mod
@@ -260,7 +276,11 @@ public final class ProbeCapture implements AutoCloseable {
             probe.setRadianceIsSrgb(true);
             return true;
         } finally {
+            //? if forge {
             modelViewStack.popPose();
+            //?} else {
+            /*modelViewStack.popMatrix();
+            *///?}
             RenderSystem.applyModelViewMatrix();
             RenderSystem.restoreProjectionMatrix();
 
