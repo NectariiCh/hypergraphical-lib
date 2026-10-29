@@ -27,7 +27,15 @@ import net.minecraftforge.fml.ModList;
  */
 public final class EmbeddiumCompat {
 
+    //? if forge {
     private static final String EMBEDDIUM = "embeddium";
+    private static final String NAME = "Embeddium";
+    //?} else {
+    /*// Sodium is the required renderer on 1.21.1: Embeddium stopped updating for NeoForge
+    // 1.21.1 and Iris refuses to run with it. Everything below holds for Sodium as well.
+    private static final String EMBEDDIUM = "sodium";
+    private static final String NAME = "Sodium";
+    *///?}
     /** Embeddium's predecessor; some packs still ship it. It is not a substitute. */
     private static final String RUBIDIUM = "rubidium";
 
@@ -47,7 +55,7 @@ public final class EmbeddiumCompat {
             String version = ModList.get().getModContainerById(EMBEDDIUM)
                     .map(container -> container.getModInfo().getVersion().toString())
                     .orElse("unknown");
-            Hypergraphical.LOGGER.info("[hypergraphical] Embeddium {} detected", version);
+            Hypergraphical.LOGGER.info("[hypergraphical] {} {} detected", NAME, version);
             return;
         }
 
@@ -56,8 +64,8 @@ public final class EmbeddiumCompat {
                     + "not. Hypergraphical requires Embeddium; Rubidium is its unmaintained "
                     + "predecessor and is not a drop-in replacement.");
         } else {
-            Hypergraphical.LOGGER.error("[hypergraphical] Embeddium is not loaded. It is a hard "
-                    + "dependency and the loader should have refused to start - expect problems.");
+            Hypergraphical.LOGGER.error("[hypergraphical] {} is not loaded. It is a hard "
+                    + "dependency and the loader should have refused to start - expect problems.", NAME);
         }
     }
 }

@@ -1,6 +1,7 @@
 package dev.nectariich.hypergraphical.render;
 
 import dev.nectariich.hypergraphical.Hypergraphical;
+import dev.nectariich.hypergraphical.util.HgIds;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.resources.ResourceManager;
 import org.joml.Matrix4f;
@@ -165,7 +166,7 @@ public final class ShaderProgram implements AutoCloseable {
                 if (first < 0 || last <= first) {
                     throw new IOException("Malformed #hg_include in " + location + ": " + trimmed);
                 }
-                ResourceLocation included = new ResourceLocation(trimmed.substring(first + 1, last));
+                ResourceLocation included = HgIds.parse(trimmed.substring(first + 1, last));
                 sb.append("// >>> ").append(included).append('\n');
                 sb.append(preprocess(resources, included, defines, depth + 1));
                 sb.append("\n// <<< ").append(included).append('\n');

@@ -1,0 +1,33 @@
+# Per-node properties, read by Stonecutter as ordinary Gradle properties.
+# Mod metadata shared by both nodes lives in gradle.properties.
+
+["1.20.1-forge"]
+minecraft_version = "1.20.1"
+minecraft_version_range = "[1.20.1,1.21)"
+forge_version = "47.4.6"
+forge_version_range = "[47,)"
+loader_version_range = "[47,)"
+pack_format = "15"
+# Hard client dependency. embeddium_version is the exact build loaded into the dev run;
+# embeddium_version_range is what mods.toml requires of users.
+embeddium_version = "0.3.31+mc1.20.1"
+embeddium_version_range = "[0.3,)"
+# Optional, loaded in the dev run only with dev_with_oculus=true.
+oculus_version = "1.20.1-1.8.0"
+oculus_version_range = "[1.6,)"
+
+["1.21.1-neoforge"]
+minecraft_version = "1.21.1"
+minecraft_version_range = "[1.21.1,1.21.2)"
+neoforge_version = "21.1.265"
+neoforge_version_range = "[21.1,)"
+loader_version_range = "[4,)"
+pack_format = "34"
+# Embeddium for 1.21.1 stopped updating in January 2025 and Iris refuses it, so Sodium is
+# the required renderer here. sodium_version is the Modrinth version loaded into the dev run.
+sodium_version = "mc1.21.1-0.6.13-neoforge"
+sodium_version_range = "[0.6,)"
+# Optional, loaded in the dev run only with dev_with_oculus=true. Modrinth version id of
+# Iris 1.8.12 for NeoForge 1.21.1.
+iris_version = "t3ruzodq"
+iris_version_range = "[1.8,)"

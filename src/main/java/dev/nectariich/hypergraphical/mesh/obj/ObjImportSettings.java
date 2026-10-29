@@ -1,6 +1,7 @@
 package dev.nectariich.hypergraphical.mesh.obj;
 
 import com.google.gson.JsonObject;
+import dev.nectariich.hypergraphical.util.HgIds;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.GsonHelper;
 
@@ -53,7 +54,7 @@ public record ObjImportSettings(boolean flipV,
                 GsonHelper.getAsBoolean(json, "flip_v", DEFAULT.flipV()),
                 parseNormals(GsonHelper.getAsString(json, "normals", "auto")),
                 GsonHelper.getAsFloat(json, "scale", DEFAULT.scale()),
-                mtl == null || mtl.isEmpty() ? null : new ResourceLocation(mtl),
+                mtl == null || mtl.isEmpty() ? null : HgIds.parse(mtl),
                 GsonHelper.getAsBoolean(json, "auto_materials", DEFAULT.autoMaterials()),
                 GsonHelper.getAsBoolean(json, "emissive_ambient", DEFAULT.emissiveAmbient()),
                 GsonHelper.getAsBoolean(json, "double_sided", DEFAULT.doubleSided()));

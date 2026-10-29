@@ -1,0 +1,50 @@
+modLoader = "javafml"
+loaderVersion = "${loader_version_range}"
+license = "${mod_license}"
+issueTrackerURL = "https://github.com/nectariich/hypergraphical/issues"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${mod_version}"
+displayName = "${mod_name}"
+authors = "${mod_authors}"
+description = '''
+${mod_description}
+'''
+
+# ---------------------------------------------------------------------------
+# Dependencies (NeoForge 1.21.1; META-INF/mods.toml is the Forge 1.20.1 file)
+# ---------------------------------------------------------------------------
+
+[[dependencies.${mod_id}]]
+    modId = "neoforge"
+    type = "required"
+    versionRange = "${neoforge_version_range}"
+    ordering = "NONE"
+    side = "BOTH"
+
+[[dependencies.${mod_id}]]
+    modId = "minecraft"
+    type = "required"
+    versionRange = "${minecraft_version_range}"
+    ordering = "NONE"
+    side = "BOTH"
+
+# Sodium takes Embeddium's place on 1.21.1: Embeddium stopped updating for NeoForge 1.21.1
+# and Iris refuses to run with it. The PBR pass assumes a GL 3.3+ core context, and we use
+# nothing from Sodium beyond the render stages it keeps firing.
+[[dependencies.${mod_id}]]
+    modId = "sodium"
+    type = "required"
+    versionRange = "${sodium_version_range}"
+    ordering = "AFTER"
+    side = "CLIENT"
+
+# Iris is optional. When a shader pack is active we defer to it: probe capture
+# downgrades to the environment strategy and our pass moves after translucents.
+[[dependencies.${mod_id}]]
+    modId = "iris"
+    type = "optional"
+    versionRange = "${iris_version_range}"
+    ordering = "AFTER"
+    side = "CLIENT"

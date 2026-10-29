@@ -11,6 +11,7 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.server.packs.resources.ResourceManager;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.minecraft.world.phys.Vec3;
+//? if forge {
 import net.minecraftforge.api.distmarker.Dist;
 import net.minecraftforge.client.event.CustomizeGuiOverlayEvent;
 import net.minecraftforge.client.event.RegisterClientCommandsEvent;
@@ -20,6 +21,18 @@ import net.minecraftforge.event.TickEvent;
 import net.minecraftforge.event.level.LevelEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.fml.common.Mod;
+//?} else {
+/*import net.neoforged.api.distmarker.Dist;
+import net.neoforged.bus.api.SubscribeEvent;
+import net.neoforged.fml.common.EventBusSubscriber;
+import net.neoforged.neoforge.client.event.ClientTickEvent;
+import net.neoforged.neoforge.client.event.CustomizeGuiOverlayEvent;
+import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
+import net.neoforged.neoforge.client.event.RegisterClientReloadListenersEvent;
+import net.neoforged.neoforge.client.event.RenderFrameEvent;
+import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
+*///?}
 
 import java.util.List;
 
@@ -36,8 +49,13 @@ public final class HgClientEvents {
     // =========================================================================
     // Mod bus: one-time registration
     // =========================================================================
+    //? if forge {
     @Mod.EventBusSubscriber(modid = Hypergraphical.MODID, value = Dist.CLIENT,
             bus = Mod.EventBusSubscriber.Bus.MOD)
+    //?} else {
+    /*@EventBusSubscriber(modid = Hypergraphical.MODID, value = Dist.CLIENT,
+            bus = EventBusSubscriber.Bus.MOD)
+    *///?}
     public static final class ModBus {
 
         private ModBus() {}
@@ -78,8 +96,13 @@ public final class HgClientEvents {
     // =========================================================================
     // Forge bus: per-frame and per-tick work
     // =========================================================================
+    //? if forge {
     @Mod.EventBusSubscriber(modid = Hypergraphical.MODID, value = Dist.CLIENT,
             bus = Mod.EventBusSubscriber.Bus.FORGE)
+    //?} else {
+    /*@EventBusSubscriber(modid = Hypergraphical.MODID, value = Dist.CLIENT,
+            bus = EventBusSubscriber.Bus.GAME)
+    *///?}
     public static final class ForgeBus {
 
         private ForgeBus() {}
@@ -91,9 +114,22 @@ public final class HgClientEvents {
          * {@code renderLevel} re-entrantly, and every render stage fires from inside that same
          * method, so capturing from one would recurse.
          */
+        //? if forge {
         @SubscribeEvent
         public static void onRenderTick(TickEvent.RenderTickEvent event) {
-            if (event.phase != TickEvent.Phase.START || !HgConfig.ENABLED.get()) {
+            if (event.phase == TickEvent.Phase.START) {
+                beginFrame(event.renderTickTime);
+            }
+        }
+        //?} else {
+        /*@SubscribeEvent
+        public static void onRenderFrame(RenderFrameEvent.Pre event) {
+            beginFrame(event.getPartialTick().getGameTimeDeltaPartialTick(false));
+        }
+        *///?}
+
+        private static void beginFrame(float partialTick) {
+            if (!HgConfig.ENABLED.get()) {
                 return;
             }
             Minecraft minecraft = Minecraft.getInstance();
@@ -111,14 +147,24 @@ public final class HgClientEvents {
             // Placement first: a probe created this frame starts baking this frame.
             HypergraphicalClient.probes()
                     .updateAutoProbes(HypergraphicalClient.scene(), cameraPos);
-            HypergraphicalClient.probes().pumpCaptures(cameraPos, event.renderTickTime);
+            HypergraphicalClient.probes().pumpCaptures(cameraPos, partialTick);
         }
 
+        //? if forge {
         @SubscribeEvent
         public static void onClientTick(TickEvent.ClientTickEvent event) {
-            if (event.phase != TickEvent.Phase.END) {
-                return;
+            if (event.phase == TickEvent.Phase.END) {
+                endClientTick();
             }
+        }
+        //?} else {
+        /*@SubscribeEvent
+        public static void onClientTick(ClientTickEvent.Post event) {
+            endClientTick();
+        }
+        *///?}
+
+        private static void endClientTick() {
             if (Minecraft.getInstance().level == null) {
                 return;
             }
@@ -145,18 +191,39 @@ public final class HgClientEvents {
 
             // Minecraft's view matrix carries rotation only; it already renders
             // camera-relative, which is exactly the space our instance matrices are in.
-            org.joml.Matrix4f view = event.getPoseStack().last().pose();
+            org.joml.Matrix4f view = viewMatrix(event);
             Vec3 cameraPos = event.getCamera().getPosition();
+            float partialTick = partialTick(event);
 
             if (solid) {
                 renderer.render(HgRenderer.Pass.SOLID, view, event.getProjectionMatrix(),
-                        cameraPos, event.getFrustum(), event.getPartialTick());
+                        cameraPos, event.getFrustum(), partialTick);
             }
             if (blend) {
                 renderer.render(HgRenderer.Pass.BLEND, view, event.getProjectionMatrix(),
-                        cameraPos, event.getFrustum(), event.getPartialTick());
+                        cameraPos, event.getFrustum(), partialTick);
             }
         }
+
+        //? if forge {
+        private static org.joml.Matrix4f viewMatrix(RenderLevelStageEvent event) {
+            return event.getPoseStack().last().pose();
+        }
+
+        private static float partialTick(RenderLevelStageEvent event) {
+            return event.getPartialTick();
+        }
+        //?} else {
+        /*// NeoForge passes no usable pose stack here: it is null for the block-layer stages
+        // and a fresh identity stack for the rest. The view rotation is the model-view matrix.
+        private static org.joml.Matrix4f viewMatrix(RenderLevelStageEvent event) {
+            return event.getModelViewMatrix();
+        }
+
+        private static float partialTick(RenderLevelStageEvent event) {
+            return event.getPartialTick().getGameTimeDeltaPartialTick(false);
+        }
+        *///?}
 
         @SubscribeEvent
         public static void onLevelUnload(LevelEvent.Unload event) {

@@ -1,6 +1,11 @@
 package dev.nectariich.hypergraphical;
 
+// The spec class is renamed for 1.21.1 by a Stonecutter replacement (stonecutter.gradle.kts).
+//? if forge {
 import net.minecraftforge.common.ForgeConfigSpec;
+//?} else {
+/*import net.neoforged.neoforge.common.ForgeConfigSpec;
+*///?}
 
 /**
  * Client configuration. Every value that can cost frames is exposed here, because the
